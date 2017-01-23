@@ -1055,30 +1055,6 @@ cdb_exchange_part_constraints(Relation table,
 				 errhint("drop the invalid constraints and retry")));
 	}
 
-
-	/*
-	 * This list is created on master and attached to
-	 * AlterPartitionCmd to be dispatched to segments.
-	 */
-	List *newOids = NIL;
-
-	/*
-	 * Used by segments to iterate over the list of new constraint
-	 * OIDs.
-	 */
-	ListCell *newOids_lc = list_head(pc->newOids);
-	Value *oidVal;
-
-	if (Gp_role == GP_ROLE_EXECUTE && (
-				list_length(missing_part_constraints) +
-				list_length(missing_constraints) != list_length(pc->newOids)))
-	{
-		elog(ERROR, "lengths of constraint OIDs do not match, "
-			 "master: %d, QE: %d", list_length(pc->newOids),
-			 list_length(missing_part_constraints) +
-			 list_length(missing_constraints));
-	}
-
 	if ( missing_part_constraints )
 	{
 		ListCell *lc;
@@ -1097,29 +1073,6 @@ cdb_exchange_part_constraints(Relation table,
 				elog(ERROR,"Invalid partition constration, not CHECK type");
 
 			map_part_attrs(part, cand, &map, TRUE);
-			if (Gp_role == GP_ROLE_DISPATCH)
-			{
-				oidVal = palloc(sizeof(Value));
-				oidVal->type = T_Integer;
-				oidVal->val.ival = GetNewOid(pgcon);
-				newOids = lappend(newOids, oidVal);
-				HeapTupleSetOid(missing_part_constraint, (Oid)oidVal->val.ival);
-			}
-			else if (Gp_role == GP_ROLE_EXECUTE)
-			{
-				/*
-				 * Consume one new OID that master gave us.  The order
-				 * in which we use new OIDs is identical to that used
-				 * by master.
-				 */
-				oidVal = (Value *)lfirst(newOids_lc);
-				if (oidVal == NULL || !OidIsValid(oidVal))
-				{
-					elog(ERROR, "invalid constraint oid from master");
-				}
-				newOids_lc = lnext(newOids_lc);
-				HeapTupleSetOid(missing_part_constraint, (Oid)oidVal->val.ival);
-			}
 			nc = constraint_apply_mapped(missing_part_constraint, map, cand,
 										 validate, is_split, pgcon);
 			if ( nc )
@@ -1143,29 +1096,7 @@ cdb_exchange_part_constraints(Relation table,
 		{
 			HeapTuple tuple = (HeapTuple)lfirst(lc);
 			Form_pg_constraint mcon = (Form_pg_constraint)GETSTRUCT(tuple);
-			if (Gp_role == GP_ROLE_DISPATCH)
-			{
-				oidVal = palloc(sizeof(Value));
-				oidVal->type = T_Integer;
-				oidVal->val.ival = GetNewOid(pgcon);
-				newOids = lappend(newOids, oidVal);
-				HeapTupleSetOid(tuple, (Oid)oidVal->val.ival);
-			}
-			else if (Gp_role == GP_ROLE_EXECUTE)
-			{
-				/*
-				 * Consume one new OID that master gave us.  The order
-				 * in which we use new OIDs is identical to that used
-				 * by master.
-				 */
-				oidVal = (Value *)lfirst(newOids_lc);
-				if (oidVal == NULL || !OidIsValid(oidVal))
-				{
-					elog(ERROR, "invalid constraint oid from master");
-				}
-				newOids_lc = lnext(newOids_lc);
-				HeapTupleSetOid(tuple, (Oid)oidVal->val.ival);
-			}
+
 			nc = constraint_apply_mapped(tuple, map, cand,
 										 validate, is_split, pgcon);
 			if ( nc )
@@ -1176,20 +1107,10 @@ cdb_exchange_part_constraints(Relation table,
 		}
 	}
 
-	if (Gp_role == GP_ROLE_DISPATCH)
-	{
-		pc->newOids = newOids;
-		if (newOids)
-			Assert(list_length(newOids) ==
-				   list_length(missing_constraints) +
-				   list_length(missing_part_constraints));
-	}
-
 	if ( delta_checks )
 	{
 		SetRelationNumChecks(cand, cand->rd_rel->relchecks + delta_checks);
 	}
-
 
 	hash_destroy(hash_tbl);
 	MemoryContextDelete(context);
@@ -2975,7 +2896,7 @@ rel_get_leaf_relids_from_rule(Oid ruleOid)
 	ScanKeyData	scankey;
 	Relation	part_rule_rel;
 	SysScanDesc sscan;
-	bool		hasChildren;
+	bool		hasChildren = false;
 	List	   *lChildrenOid = NIL;
 	HeapTuple	tuple;
 
@@ -4422,6 +4343,9 @@ selectHashPartition(PartitionNode *partnode, Datum *values, bool *isnull,
 	int part;
 	PartitionRule *rule;
 	MemoryContext oldcxt = NULL;
+
+	if (partnode->rules == NIL)
+		return NULL;
 
 	if (accessMethods && accessMethods->part_cxt)
 		oldcxt = MemoryContextSwitchTo(accessMethods->part_cxt);
@@ -6621,11 +6545,6 @@ atpxPartAddList(Relation rel,
 
 	ct->distributedBy = NULL;
 	ct->partitionBy = (Node *)pBy;
-	ct->oidInfo.relOid = 0;
-	ct->oidInfo.comptypeOid = 0;
-	ct->oidInfo.toastOid = 0;
-	ct->oidInfo.toastIndexOid = 0;
-	ct->oidInfo.toastComptypeOid = 0;
 	ct->relKind = RELKIND_RELATION;
 	ct->policy = 0;
 	ct->postCreate = NULL;
@@ -8000,7 +7919,7 @@ get_opfuncid_by_opname(List *opname, Oid lhsid, Oid rhsid)
 
 	opfuncid = ((Form_pg_operator)GETSTRUCT(op))->oprcode;
 
-	ReleaseOperator(op);
+	ReleaseSysCache(op);
 	return opfuncid;
 }
 
@@ -8463,7 +8382,6 @@ constraint_apply_mapped(HeapTuple tuple, AttrMap *map, Relation cand,
 			Assert( conexpr && conbin && consrc );
 
 			CreateConstraintEntry(NameStr(con->conname),
-								  HeapTupleGetOid(tuple),
 								  con->connamespace, // XXX should this be RelationGetNamespace(cand)?
 								  con->contype,
 								  con->condeferrable,
@@ -8513,7 +8431,6 @@ constraint_apply_mapped(HeapTuple tuple, AttrMap *map, Relation cand,
 			indexoid = transformFkeyCheckAttrs(frel, nfkeys, fkeys, opclasses);
 
 			CreateConstraintEntry(NameStr(con->conname),
-								  InvalidOid,
 								  RelationGetNamespace(cand),
 								  con->contype,
 								  con->condeferrable,
@@ -9512,8 +9429,6 @@ createValueArrays(int keyAttno, Datum **values, bool **isnull)
 {
 	*values = palloc0(keyAttno * sizeof(Datum));
 	*isnull = palloc(keyAttno * sizeof(bool));
-	Assert (NULL != values);
-	Assert (NULL != isnull);
 
 	MemSet(*isnull, true, keyAttno * sizeof(bool));
 }

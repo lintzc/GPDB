@@ -49,7 +49,6 @@ extern Oid index_create(Oid heapRelationId,
 			 Datum reloptions,
 			 bool isprimary,
 			 bool isconstraint,
-			 Oid *constrOid,
 			 bool allow_system_table_mods,
 			 bool skip_build,
 			 bool concurrent,
@@ -65,7 +64,7 @@ extern void FormIndexDatum(IndexInfo *indexInfo,
 			   Datum *values,
 			   bool *isnull);
 
-extern Oid setNewRelfilenode(Relation relation, TransactionId freezeXid);
+extern void setNewRelfilenode(Relation relation, TransactionId freezeXid);
 extern Oid setNewRelfilenodeToOid(Relation relation, TransactionId freezeXid,
 					   Oid newrelfilenode);
 
@@ -86,10 +85,8 @@ extern void validate_index(Oid heapId, Oid indexId, Snapshot snapshot);
 
 extern void index_set_state_flags(Oid indexId, IndexStateFlagsAction action);
 
-extern Oid reindex_index(Oid indexId, Oid newrelfilenode, List **extra_oids);
-extern bool reindex_relation(Oid relid, bool toast_too, bool aoseg_too, 
-							 bool aoblkdir_too, bool aovisimap_too,
-							 List **oidmap, bool build_map);
+extern void reindex_index(Oid indexId);
+extern bool reindex_relation(Oid relid, bool toast_too);
 
 extern Oid IndexGetRelation(Oid indexId);
 

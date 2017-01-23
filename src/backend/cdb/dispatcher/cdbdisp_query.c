@@ -1,4 +1,3 @@
-
 /*-------------------------------------------------------------------------
  *
  * cdbdisp_query.c
@@ -64,6 +63,12 @@ typedef struct DispatchCommandQueryParms
 	int serializedParamslen;
 
 	/*
+	 * Additional information.
+	 */
+	char	   *serializedOidAssignments;
+	int			serializedOidAssignmentslen;
+
+	/*
 	 * serialized DTX context string
 	 */
 	char *serializedDtxContextInfo;
@@ -87,6 +92,8 @@ static void
 cdbdisp_dispatchCommandInternal(const char *strCommand,
 											char *serializedQuerytree,
 											int serializedQuerytreelen,
+											char *serializedQueryDispatchDesc,
+											int serializedQueryDispatchDesclen,
 											int flags,
 											CdbPgResults *cdb_pgresults);
 
@@ -166,9 +173,9 @@ buildSliceIndexGangIdMap(SliceVec *sliceVec, int numSlices, int numTotalSlices);
  * The message is deserialized and processed by exec_mpp_query() in postgres.c.
  */
 void
-cdbdisp_dispatchPlan(struct QueryDesc *queryDesc,
-					 bool planRequiresTxn,
-					 bool cancelOnError, struct CdbDispatcherState *ds)
+CdbDispatchPlan(struct QueryDesc *queryDesc,
+				bool planRequiresTxn,
+				bool cancelOnError, struct CdbDispatcherState *ds)
 {
 	SliceTable *sliceTbl;
 	int oldLocalSlice;
@@ -279,17 +286,17 @@ cdbdisp_dispatchPlan(struct QueryDesc *queryDesc,
  * gangs, both reader and writer
  */
 void
-CdbSetGucOnAllGangs(const char *strCommand,
-					bool cancelOnError, bool needTwoPhase)
+CdbDispatchSetCommand(const char *strCommand,
+					  bool cancelOnError, bool needTwoPhase)
 {
 	volatile CdbDispatcherState ds = {NULL, NULL, NULL};
 	const bool	withSnapshot = true;
 
 	elog((Debug_print_full_dtm ? LOG : DEBUG5),
-		 "CdbSetGucOnAllGangs for command = '%s', needTwoPhase = %s",
+		 "CdbDispatchSetCommand for command = '%s', needTwoPhase = %s",
 		 strCommand, (needTwoPhase ? "true" : "false"));
 
-	dtmPreCommand("CdbSetGucOnAllGangs", strCommand, NULL, needTwoPhase,
+	dtmPreCommand("CdbDispatchSetCommand", strCommand, NULL, needTwoPhase,
 				  withSnapshot, false /* inCursor */ );
 
 	PG_TRY();
@@ -336,10 +343,12 @@ CdbDispatchCommand(const char* strCommand,
 					CdbPgResults* cdb_pgresults)
 {
 	return cdbdisp_dispatchCommandInternal(strCommand,
-											NULL,
-											0,
-											flags,
-											cdb_pgresults);
+										   NULL,
+										   0,
+										   NULL,
+										   0,
+										   flags,
+										   cdb_pgresults);
 }
 
 /*
@@ -359,16 +368,21 @@ CdbDispatchCommand(const char* strCommand,
 void
 CdbDispatchUtilityStatement(struct Node *stmt,
 							int flags,
-							CdbPgResults* cdb_pgresults)
+							List *oid_assignments,
+							CdbPgResults *cdb_pgresults)
 {
-	char *serializedQuerytree;
-	int serializedQuerytree_len;
+	char	   *serializedQuerytree;
+	int			serializedQuerytree_len;
+	char	   *serializedQueryDispatchDesc = NULL;
+	int			serializedQueryDispatchDesc_len = 0;
+	Query	   *q;
+	QueryDispatchDesc *qddesc;
 
 	Assert(stmt != NULL);
 	Assert(stmt->type < 1000);
 	Assert(stmt->type > 0);
 
-	Query *q = makeNode(Query);
+	q = makeNode(Query);
 
 	q->querySource = QSRC_ORIGINAL;
 	q->commandType = CMD_UTILITY;
@@ -387,15 +401,27 @@ CdbDispatchUtilityStatement(struct Node *stmt,
 	/*
 	 * serialized the stmt tree, and create the sql statement: mppexec ....
 	 */
-	serializedQuerytree = serializeNode((Node *) q, &serializedQuerytree_len, NULL /*uncompressed_size */);
+	serializedQuerytree = serializeNode((Node *) q, &serializedQuerytree_len,
+										NULL /*uncompressed_size */);
 
 	Assert(serializedQuerytree != NULL);
+
+	if (oid_assignments)
+	{
+		qddesc = makeNode(QueryDispatchDesc);
+		qddesc->oidAssignments = oid_assignments;
+
+		serializedQueryDispatchDesc = serializeNode((Node *) qddesc, &serializedQueryDispatchDesc_len,
+													NULL /*uncompressed_size */);
+	}
 
 	/*
 	 * Dispatch serializedQuerytree to primary writer gang.
 	 */
 	return cdbdisp_dispatchCommandInternal(debug_query_string,
-			serializedQuerytree, serializedQuerytree_len, flags, cdb_pgresults);
+										   serializedQuerytree, serializedQuerytree_len,
+										   serializedQueryDispatchDesc, serializedQueryDispatchDesc_len,
+										   flags, cdb_pgresults);
 }
 
 /*
@@ -408,6 +434,8 @@ static void
 cdbdisp_dispatchCommandInternal(const char *strCommand,
 								char *serializedQuerytree,
 								int serializedQuerytreelen,
+								char *serializedQueryDispatchDesc,
+								int serializedQueryDispatchDesclen,
 								int flags,
 								CdbPgResults *cdb_pgresults)
 {
@@ -444,11 +472,13 @@ cdbdisp_dispatchCommandInternal(const char *strCommand,
 	pQueryParms->strCommand = strCommand;
 	pQueryParms->serializedQuerytree = serializedQuerytree;
 	pQueryParms->serializedQuerytreelen = serializedQuerytreelen;
+	pQueryParms->serializedQueryDispatchDesc = serializedQueryDispatchDesc;
+	pQueryParms->serializedQueryDispatchDesclen = serializedQueryDispatchDesclen;
 
 	/*
 	 * Allocate a primary QE for every available segDB in the system.
 	 */
-	primaryGang = allocateWriterGang();
+	primaryGang = AllocateWriterGang();
 
 	Assert(primaryGang);
 
@@ -485,6 +515,8 @@ cdbdisp_dispatchCommandInternal(const char *strCommand,
 	{
 		cdbdisp_dispatchToGang(&ds, primaryGang, -1, DEFAULT_DISP_DIRECT);
 
+		cdbdisp_waitDispatchFinish(&ds);
+
 		/*
 		 * Block until valid results is available or one or more QEs got errors.
 		 */
@@ -498,12 +530,19 @@ cdbdisp_dispatchCommandInternal(const char *strCommand,
 			/*
 			 * debug_string_query is not meaningful for utility statement
 			 */
+			/*
+			 * XXX: It would be nice to get more details from the segment, not
+			 * just the error message. In particular, an error code would be
+			 * nice. DATA_EXCEPTION is a pretty wild guess on the real cause.
+			 */
 			if (serializedQuerytree != NULL)
-				ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+				ereport(ERROR,
+						(errcode(ERRCODE_DATA_EXCEPTION),
 						errmsg("%s", qeErrorMsg.data)));
 			else
 
-				ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+				ereport(ERROR,
+						(errcode(ERRCODE_DATA_EXCEPTION),
 						errmsg("could not execute command on QE"),
 						errdetail("%s", qeErrorMsg.data),
 						errhint("command: '%s'",strCommand)));
@@ -1293,6 +1332,8 @@ cdbdisp_dispatchX(DispatchCommandQueryParms *pQueryParms,
 
 	pfree(sliceVector);
 
+	cdbdisp_waitDispatchFinish(ds);
+
 	/*
 	 * If bailed before completely dispatched, stop QEs and throw error.
 	 */
@@ -1378,7 +1419,7 @@ cdbdisp_dispatchSetCommandToAllGangs(const char *strCommand,
 	/*
 	 * Allocate a primary QE for every available segDB in the system.
 	 */
-	primaryGang = allocateWriterGang();
+	primaryGang = AllocateWriterGang();
 
 	Assert(primaryGang);
 
@@ -1437,6 +1478,8 @@ cdbdisp_dispatchSetCommandToAllGangs(const char *strCommand,
 			cdbdisp_dispatchToGang(ds, rg, -1, DEFAULT_DISP_DIRECT);
 		}
 	}
+
+	cdbdisp_waitDispatchFinish(ds);
 }
 
 static int *

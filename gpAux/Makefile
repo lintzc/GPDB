@@ -16,16 +16,9 @@ all : devel
 # (release builds)
 .PHONY : dist dist_prof 
 
-# Targets which refresh files via rsync before building
-.PHONY : dbg opt both
-
 # Targets recognized by the PostgreSQL makefile (GNUmakefile)
 .PHONY : all install installdirs uninstall distprep
 .PHONY : clean distclean maintainer-clean
-.PHONY : check installcheck installcheck-parallel
-
-# Targets for running regression tests
-.PHONY : installcheck-good installcheck-optfunctional installcheck-olaptest installcheck-bugbuster
 
 # The pvk target builds a subset of the GPDB package that includes just the
 # tools used to verify the configuration of a set of GPDB servers.
@@ -35,7 +28,7 @@ all : devel
 .PHONY : autoconf
 
 # Internal functions which are invoked by other rules within this makefile
-.PHONY : groupSession mkgpfdist mkgpperfmon copydocs mgmtcopy copylibs copyoptimizerlibs
+.PHONY : mkgpfdist mkgpperfmon copydocs mgmtcopy copylibs
 .PHONY : greenplum_path RECONFIG HOMEDEP GPROOTDEP GPROOTDEP GPROOTFAIL
 .PHONY : gccVersionCheck clients loaders connectivity gppkg
 
@@ -120,7 +113,7 @@ ISCONFIG=$(GPPGDIR)/GNUmakefile
 ## On these platforms, we do the full build including the server. On other
 ## platforms, we do a client-only build.
 ##
-SERVER_PLATFORMS=rhel5_x86_32 rhel5_x86_64 rhel6_x86_64 suse10_x86_64 suse11_x86_64 linux_x86_64 osx106_x86
+SERVER_PLATFORMS=rhel5_x86_32 rhel5_x86_64 rhel7_x86_64 rhel6_x86_64 suse10_x86_64 suse11_x86_64 linux_x86_64 osx106_x86
 
 #---------------------------------------------------------------------
 # GPPKG
@@ -130,22 +123,14 @@ SERVER_PLATFORMS=rhel5_x86_32 rhel5_x86_64 rhel6_x86_64 suse10_x86_64 suse11_x86
 ## Support gppkg platforms
 ##
 
-GPPKG_PLATFORMS=rhel5_x86_64 rhel6_x86_64 suse10_x86_64 suse11_x86_64
+GPPKG_PLATFORMS=rhel5_x86_64 rhel7_x86_64 rhel6_x86_64 suse10_x86_64 suse11_x86_64
 
 #---------------------------------------------------------------------
 # Compiler options
 #---------------------------------------------------------------------
 
-INLINE_FLAGS=-finline-limit=1800
-
-OPTFLAGS="$(strip $(BLD_CFLAGS) -O3 -funroll-loops -fargument-noalias-global -fno-omit-frame-pointer $(COPTX) -g $(INLINE_FLAGS) $(TRACE_GCC_FLAG))"
-PROFFLAGS="$(strip $(BLD_CFLAGS) -O3 -funroll-loops -fargument-noalias-global -fno-omit-frame-pointer $(COPTX) -g $(INLINE_FLAGS) $(TRACE_GCC_FLAG))"
-
-ifeq (on, ${GPDBGINLINE})
-CFLAGS_INLINE=$(INLINE_FLAGS)
-else
-CFLAGS_INLINE=-fno-inline
-endif
+OPTFLAGS="$(strip $(BLD_CFLAGS) -O3 -fargument-noalias-global -fno-omit-frame-pointer -g)"
+PROFFLAGS="$(strip $(BLD_CFLAGS) -O3 -fargument-noalias-global -fno-omit-frame-pointer -g)"
 
 ifeq (on, ${GPDBGOPT})
 CFLAGS_OPT=-O1 -fno-omit-frame-pointer
@@ -159,7 +144,7 @@ else
 DEBUG_CFLAGS_OPT=-g3
 endif
 
-DEBUGFLAGS="$(strip $(BLD_CFLAGS) $(CFLAGS_INLINE) $(CFLAGS_OPT) $(DEBUG_CFLAGS_OPT) $(TRACE_GCC_FLAG))"
+DEBUGFLAGS="$(strip $(BLD_CFLAGS) $(CFLAGS_OPT) $(DEBUG_CFLAGS_OPT))"
 
 #---------------------------------------------------------------------
 # configure
@@ -183,6 +168,7 @@ sol10_x86_64_CONFIGFLAGS=--enable-snmp --with-libxml $(APR_CONFIG)
 rhel5_x86_32_CONFIGFLAGS=--host=i686-pc-linux-gnu --enable-snmp --enable-ddboost --with-gssapi --enable-netbackup --with-libxml $(APR_CONFIG)
 rhel5_x86_64_CONFIGFLAGS=--enable-snmp --enable-connectemc --enable-ddboost --with-gssapi --enable-netbackup ${ORCA_CONFIG} ${CODEGEN_CONFIG} --with-libxml $(APR_CONFIG)
 rhel6_x86_64_CONFIGFLAGS=--enable-snmp --enable-connectemc --enable-ddboost --with-gssapi --enable-netbackup ${ORCA_CONFIG} ${CODEGEN_CONFIG} --with-libxml $(APR_CONFIG)
+rhel7_x86_64_CONFIGFLAGS=--enable-snmp --enable-connectemc --enable-ddboost --with-gssapi --enable-netbackup ${ORCA_CONFIG} ${CODEGEN_CONFIG} --with-libxml $(APR_CONFIG)
 suse10_x86_64_CONFIGFLAGS=--enable-snmp --enable-ddboost ${ORCA_CONFIG} ${CODEGEN_CONFIG} --with-libxml $(APR_CONFIG)
 suse11_x86_64_CONFIGFLAGS=--enable-snmp --enable-ddboost ${ORCA_CONFIG} ${CODEGEN_CONFIG} --with-libxml $(APR_CONFIG)
 linux_x86_64_CONFIGFLAGS=--enable-snmp ${ORCA_CONFIG} ${CODEGEN_CONFIG} --with-libxml $(APR_CONFIG)
@@ -190,7 +176,7 @@ osx106_x86_CONFIGFLAGS=--enable-snmp ${ORCA_CONFIG} ${CODEGEN_CONFIG} --with-lib
 
 BLD_CONFIGFLAGS=$($(BLD_ARCH)_CONFIGFLAGS)
 
-CONFIGFLAGS=$(strip $(BLD_CONFIGFLAGS) --with-pgport=$(DEFPORT) --with-libedit-preferred $(TRACE_CFG_FLAG) $(BLD_DEPLOYMENT_SETTING)) 
+CONFIGFLAGS=$(strip $(BLD_CONFIGFLAGS) --with-pgport=$(DEFPORT) --with-libedit-preferred $(BLD_DEPLOYMENT_SETTING))
 
 # PL/Python does not compile on Tiger, skipping it on AIX
 ifneq "$(findstring $(BLD_ARCH),aix5_ppc_64 aix5_ppc_32)" ""
@@ -209,14 +195,12 @@ aix5_ppc_64_PTHREADS_LIB_DIR=/usr/lib/threads
 aix5_ppc_32_PTHREADS_LIB_DIR=/usr/lib/threads
 BLD_PTHREADS_LIB_DIR=$($(BLD_ARCH)_PTHREADS_LIB_DIR)
 
-ADDON_DIR=addon
-
 ifdef ADDON_DIR
 ADDON_CONFIG_INCLUDES=$(BLD_TOP)/$(ADDON_DIR)/src/include
 endif
 
 # Configure in thirdparty libraries from the ext/ directory
-CONFIG_INCLUDES=$(BLD_THIRDPARTY_INCLUDE_DIR) $(BLD_THIRDPARTY_INCLUDE_DIR)/libxml2 $(BLD_THIRDPARTY_DIR)/libgpopt/include $(BLD_THIRDPARTY_DIR)/libgpos/include $(ADDON_CONFIG_INCLUDES)
+CONFIG_INCLUDES=$(BLD_THIRDPARTY_INCLUDE_DIR) $(BLD_THIRDPARTY_INCLUDE_DIR)/libxml2 $(ADDON_CONFIG_INCLUDES)
 CONFIG_LIBRARIES=$(strip $(BLD_THIRDPARTY_LIB_DIR) $(BLD_CXX_LIB_DIR) $(BLD_PTHREADS_LIB_DIR))
 CONFIGFLAGS+= --with-includes="$(CONFIG_INCLUDES)" --with-libraries="$(CONFIG_LIBRARIES)"
 
@@ -299,37 +283,6 @@ Release/GNUmakefile : $(GPPGDIR)/configure  env.sh
                       --with-docdir=$(INSTLOC)/doc          \
                       --mandir=$(INSTLOC)/man
 
-## ======================================================================
-## Generate json catalog file
-##
-## Requirement:
-##   This tidycat.pl utility has a perl JSON package dependency.  You'll
-##   need to ensure you have this setup in your enviroment to execute
-##   this process.
-##
-## Here are the basic steps:
-##
-##   1) A "configure" must have been run.  This is required so
-##      GP_MAJORVERSION can be retrieved from the
-##      src/include/pg_config.h and used to create the
-##      json file name (eg. 4.2.json).
-##   2) (manual) p4 edit gpMgmt/bin/gppylib/data/<version>.json
-##   3) make gen_json_cat
-##   4) (manual file generation review) p4 diff gpMgmt/bin/gppylib/data/<version>.json
-##   5) (manual) p4 submit "Regenerate Json catalog file." gpMgmt/bin/gppylib/data/<version>.json
-## ======================================================================
-
-gen_json_cat:
-	@if [ ! -f $(ISCONFIG) ]; then echo ""; echo "FATAL: The cdb-pg environment has not been configured.  Thus we cannot attempt to generate json catalog file."; echo ""; exit 1; fi
-	@JASON_CAT=gpMgmt/bin/gppylib/data/`grep GP_MAJORVERSION ../src/include/pg_config.h | sed 's/.*"\(.*\)"/\1/g' `.json; \
-	if [ ! -w $$JASON_CAT ]; then echo ""; echo "FATAL: The json cat file is not writable ($$JASON_CAT).  Have you performed a p4 edit $$JASON_CAT operation?"; echo ""; exit 1; fi; \
-	cd $(BLD_TOP)/../src/include/catalog; \
-	perl tidycat.pl -dd $(BLD_TOP)/$$JASON_CAT -df json *.h; \
-	if [ $$? != 0 ]; then echo ""; echo "FATAL: json cat file generation failed."; echo ""; exit 1; fi; \
-	echo "To manually review and submit the updated json cat file, run:"; \
-	echo "  p4 diff $$JASON_CAT"; \
-	echo "  p4 submit -d \"Regenerate Json catalog file. [JIRA: MPP-XXXX]\" $$JASON_CAT"; \
-
 #---------------------------------------------------------------------
 # autoconf
 #---------------------------------------------------------------------
@@ -369,8 +322,6 @@ define BUILD_STEPS
 	@rm -rf $(INSTLOC)
 	cd $(BUILDDIR) && $(MAKE) $(parallelexec_opts) install
 	#@$(MAKE) greenplum_path INSTLOC=$(INSTLOC)
-	#@$(MAKE) groupSession INSTLOC=$(INSTLOC)
-	@$(MAKE) mkdbgen INSTLOC=$(INSTLOC)
 	#@$(MAKE) mgmtcopy INSTLOC=$(INSTLOC)
 	@$(MAKE) mkpgbouncer INSTLOC=$(INSTLOC) BUILDDIR=$(BUILDDIR)
 	@$(MAKE) mkpgbench INSTLOC=$(INSTLOC) BUILDDIR=$(BUILDDIR)
@@ -381,7 +332,6 @@ define BUILD_STEPS
 	  $(MAKE) mkorafce INSTLOC=$(INSTLOC); \
 	fi
 	cd extensions/gpmapreduce/ && $(MAKE) install
-	cd extensions/gp_filedump/ && $(MAKE) install
 	@$(MAKE) copydocs INSTLOC=$(INSTLOC)
 	@$(MAKE) copylibs INSTLOC=$(INSTLOC)
 	@$(MAKE) clients INSTLOC=$(INSTLOC) CLIENTINSTLOC=$(CLIENTINSTLOC)
@@ -390,10 +340,6 @@ define BUILD_STEPS
 	@$(MAKE) set_scripts_version INSTLOC=$(CONNECTIVITYINSTLOC)
 	@$(MAKE) loaders INSTLOC=$(INSTLOC) LOADERSINSTLOC=$(LOADERSINSTLOC)
 	@$(MAKE) set_scripts_version INSTLOC=$(LOADERSINSTLOC)
-	## NOTE: The copyoptimizerlibs taret must be called after the
-	## clients and connectivity targets (above) so as to keep the
-	## optimizer libs out of their respective distributions.
-	@$(MAKE) copyoptimizerlibs INSTLOC=$(INSTLOC)
 	@$(MAKE) set_scripts_version INSTLOC=$(CLIENTINSTLOC)
 	@$(MAKE) copylicense INSTLOC=$(INSTLOC) \
                          CLIENTINSTLOC=$(CLIENTINSTLOC) \
@@ -407,8 +353,7 @@ define BUILD_STEPS
 	rm -rf $(INSTLOC)
 	cd $(BUILDDIR)/src/include/ && $(MAKE) install
 	@$(MAKE) mkgpfdist INSTLOC=$(INSTLOC)
-	@$(MAKE) mkgps3ext INSTLOC=$(INSTLOC)
-	@$(MAKE) mkdbgen INSTLOC=$(INSTLOC)
+	@$(MAKE) mkgpcloud INSTLOC=$(INSTLOC)
 	@$(MAKE) mgmtcopy INSTLOC=$(INSTLOC)
 	@$(MAKE) copylibs INSTLOC=$(INSTLOC)
 	@$(MAKE) loaders INSTLOC=$(INSTLOC) LOADERSINSTLOC=$(LOADERSINSTLOC)
@@ -420,8 +365,6 @@ endif
 
 ifeq "$(BLD_GPDB_BUILDSET)" "partial"
 define BUILD_STEPS
-	rm -f installcheck-good_SKIP
-	rm -f installcheck-bugbuster_SKIP
 	rm -rf $(INSTLOC)
 	@if [ "$(findstring win,$(BLD_ARCH))" = "win" ]; then \
 	    echo "Modifying timezone Makefile for crosscompile."; \
@@ -458,8 +401,6 @@ define BUILD_STEPS
 	  cd $(GPMGMT)/bin && $(MAKE) pygresql INSTLOC=$(INSTLOC) ; \
 	fi
 	$(MAKE) loaders INSTLOC=$(INSTLOC) LOADERSINSTLOC=$(LOADERSINSTLOC)
-	touch installcheck-good_SKIP
-	touch installcheck-bugbuster_SKIP
 endef
 endif
 
@@ -480,20 +421,6 @@ env.sh:
 ifneq "$(PERL_DIR)" ""
 	echo "export PERL5LIB=$(PERL_DIR)/lib/site_perl/5.12.4/x86_64-linux:$(PERL_DIR)/lib/site_perl/5.12.4:$(PERL_DIR)/lib/5.12.4/x86_64-linux:$(PERL_DIR)/lib/5.12.4" >> env.sh
 endif
-
-#---------------------------------------------------------------------
-# rsync + build
-#---------------------------------------------------------------------
-
-both : dbg opt ;
-
-dbg:
-	rsync -rlvt --exclude=devel*/ --exclude=dist*/ --exclude=LOG.* ./ devel$(BLD_BITS)/
-	cd devel$(BLD_BITS) && $(MAKE) BLD_HOME=`pwd` PG_LANG=true devel
-
-opt:
-	rsync -rlvt --exclude=devel*/ --exclude=dist*/ --exclude=LOG.* ./ dist$(BLD_BITS)/
-	cd dist$(BLD_BITS) && $(MAKE) GPROOT=`pwd` PG_LANG=true dist
 
 #---------------------------------------------------------------------
 # Development builds
@@ -707,6 +634,7 @@ sol10_sparc_64_MPP_ARCH=SOL10-sparc_64
 sol10_sparc_32_MPP_ARCH=SOL10-sparc_32
 rhel5_x86_64_MPP_ARCH=RHEL5-x86_64
 rhel6_x86_64_MPP_ARCH=RHEL6-x86_64
+rhel7_x86_64_MPP_ARCH=RHEL7-x86_64
 osx106_x86_MPP_ARCH=OSX-i386
 ifneq "$($(BLD_ARCH)_MPP_ARCH)" ""
 export MPP_ARCH=$($(BLD_ARCH)_MPP_ARCH)
@@ -717,13 +645,6 @@ endif
 
 ifeq "$(INSTLOC)" ""
 INSTLOC=$(GPDIR)
-endif
-
-# define build flags for GP Optimizer UDFs library
-ifeq (Darwin, $(BLD_OS))
-	GPOPT_UDF_FLAGS := -m32 -dynamiclib -flat_namespace -undefined dynamic_lookup
-else
-	GPOPT_UDF_FLAGS := -m64 -shared
 endif
 
 VERSION:=$(shell [ -f ../VERSION ] && perl -pe 's, ,-,g' ../VERSION)
@@ -922,8 +843,6 @@ endif
 #---------------------------------------------------------------------
 
 PVK_SCRIPTS = \
-	bin/diskqual.ksh	\
-	bin/generate_load_tpch.pl	\
 	bin/gpscp			\
 	bin/gpssh			\
 	bin/gpcheckperf			\
@@ -1015,9 +934,6 @@ set_scripts_version :
 # Internal functions
 #---------------------------------------------------------------------
 
-groupSession:
-	@cd $(GPMGMT)/bin && $(MAKE)
-
 mkgpfdist:
 	@cd extensions && $(MAKE) mkgpfdist OPT="$(INSTCFLAGS)" INSTLOC=$(INSTLOC)
 	cp -p extensions/gpfdist/gpfdist$(EXE_EXT) $(INSTLOC)/bin/
@@ -1025,15 +941,11 @@ mkgpfdist:
 mkgphdfs:
 	@cd extensions && $(MAKE) mkgphdfs OPT="$(INSTCFLAGS)" INSTLOC=$(INSTLOC)
 
-mkgps3ext:
-	@cd extensions && $(MAKE) mks3ext OPT="$(INSTCFLAGS)" INSTLOC=$(INSTLOC)
+mkgpcloud:
+	@cd extensions && $(MAKE) mkgpcloud OPT="$(INSTCFLAGS)" INSTLOC=$(INSTLOC)
 
 mkorafce:
 	@cd extensions && $(MAKE) mkorafce OPT="$(INSTCFLAGS)" INSTLOC=$(INSTLOC)
-
-mkdbgen:
-	@cd extensions && $(MAKE) mkdbgen OPT="$(INSTCFLAGS)" INSTLOC=$(INSTLOC)
-	cp extensions/tpch/source/dbgen extensions/tpch/source/dists.dss $(INSTLOC)/bin
 
 mkpgbench:
 	@cd $(BUILDDIR)/contrib/pgbench && $(MAKE) install
@@ -1064,8 +976,6 @@ mkplatform:
 	@cd $(PLATFORM) && $(MAKE)
 	cp -p platform/gpnetbench/gpnetbenchServer $(INSTLOC)/bin/lib
 	cp -p platform/gpnetbench/gpnetbenchClient $(INSTLOC)/bin/lib
-	mkdir -p $(INSTLOC)/etc
-	cp -p platform/gpcheck/gpcheck.cnf $(INSTLOC)/etc/
 
 copydocs :
 	@if [ ! -d $($INSTLOC)/docs ] ; then mkdir -p $(INSTLOC)/docs; fi
@@ -1141,7 +1051,7 @@ libcopy=(cd $(1) && $(TAR) cf - $(2)) | (cd $(3) && $(TAR) xvf -)$(check_pipe_fo
 
 copy-nbu-libs:
 	#Copy NetBackup libs
-ifeq ($(BLD_ARCH),$(filter $(BLD_ARCH),rhel6_x86_64 rhel5_x86_64))
+ifeq ($(BLD_ARCH),$(filter $(BLD_ARCH),rhel7_x86_64 rhel6_x86_64 rhel5_x86_64))
 	rm -f $(INSTLOC)/lib/libxbsa64.so;
 	rm -f $(INSTLOC)/lib/libnbclientcST.so;
 	rm -f $(INSTLOC)/lib/libnbbasecST.so;
@@ -1235,27 +1145,6 @@ ifeq "$(BLD_ARCH)" "win32"
 	cp -rp $(BLD_TOP)/ext/win32/kfw-3-2-2/lib/*dll $(INSTLOC)/lib/
 endif
 
-## ----------------------------------------------------------------------
-## Copy Optimizer (orca) specific libraries to INSTLOC.  It must be
-## called after the clients and connectivity targets have been
-## executed to populate their respective installation directories.
-## The clients and connectivity targets copy the entire contents of
-## the db libs directory.  There is no need to copy the optimizer
-## files and thus it has been broken out into it's own target.
-## ----------------------------------------------------------------------
-
-copyoptimizerlibs :
-ifneq "$(BLD_GPDB_BUILDSET)" "partial"
-ifeq "$(ORCA_CONFIG)" "--enable-orca"
-	cd $(LIBSTDC++_LIBDIR); tar cvf - * | (cd $(INSTLOC)/lib; tar xfp -)
-
-	# Create GP Optimizer UDFs library  
-	echo "Create GP Optimizer UDFs library";
-	rm -f $(INSTLOC)/lib/libgpoptudf.$(LDSFX);
-	g++ $(GPOPT_UDF_FLAGS) -L$(INSTLOC)/lib -lgpos -lnaucrates -lgpdbcost -lgpopt -o $(INSTLOC)/lib/libgpoptudf.$(LDSFX)  ./../src/backend/gpopt/utils/funcs.o ;
-endif
-endif
-
 greenplum_path:
 	mkdir -p $(INSTLOC)
 	unset LIBPATH; \
@@ -1328,32 +1217,6 @@ distprep : $(ISCONFIG)
 	@cd $(BUILDDIR) && $(MAKE) distprep
 
 #---------------------------------------------------------------------
-# Regression tests
-#---------------------------------------------------------------------
-
-bouncer:
-	@cd $(BUILDDIR)/src/test/regress && $(MAKE) testbouncer
-
-installcheck-good :
-	@if [ ! -f $(ISCONFIG) ]; then echo "not configured, cannot check"; exit 1; fi
-	@cd $(BUILDDIR)/src/test/regress && $(MAKE) installcheck-good
-	@#cd $(BUILDDIR)/src/test/regress && $(MAKE) testbouncer
-	@cd extensions && $(MAKE) installcheck
-
-installcheck-parallel :
-	@if [ ! -f $(ISCONFIG) ]; then echo "not configured, cannot check"; exit 1; fi
-	@cd $(BUILDDIR)/src/test/regress && $(MAKE) installcheck-parallel
-	@cd extensions && $(MAKE) installcheck
-
-installcheck-olaptest :
-	@if [ ! -f $(ISCONFIG) ]; then echo "not configured, cannot check"; exit 1; fi
-	@cd $(BUILDDIR)/src/test/regress && $(MAKE) installcheck-olaptest
-
-installcheck-bugbuster :
-	@if [ ! -f $(ISCONFIG) ]; then echo "not configured, cannot check"; exit 1; fi
-	@cd $(BUILDDIR)/src/test/regress && $(MAKE) installcheck-bugbuster
-
-#---------------------------------------------------------------------
 # More internal functions
 #---------------------------------------------------------------------
 
@@ -1375,7 +1238,7 @@ gccVersionCheck :
 
 ## ----------------------------------------------------------------------
 
-ifeq ($(BLD_ARCH),$(filter $(BLD_ARCH),rhel6_x86_64))
+ifeq ($(BLD_ARCH),$(filter $(BLD_ARCH),rhel7_x86_64 rhel6_x86_64))
 GPPKG_SOURCES = \
 	../src/pl/plperl \
 	$(NULL)
@@ -1439,7 +1302,7 @@ else
 endif
 endif
 
-ifeq ($(BLD_ARCH),$(filter $(BLD_ARCH),rhel6_x86_64 suse11_x86_64))
+ifeq ($(BLD_ARCH),$(filter $(BLD_ARCH),rhel7_x86_64 rhel6_x86_64 suse11_x86_64))
 GPPKG_ROOT_DIR = \
 	../src/pl/plperl \
 	$(NULL)
@@ -1493,10 +1356,3 @@ else
 	done
 endif
 endif
-
-## ----------------------------------------------------------------------
-
-.PHONY : unittest-check
-unittest-check:
-	$(MAKE) -C ../src/backend unittest-check
-	$(MAKE) -C ../src/bin unittest-check

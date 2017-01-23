@@ -79,8 +79,8 @@ typedef struct
 	void *tuplesort;	/* for sorting the index TIDs */
 	/* statistics (for debug purposes only): */
 	double		htups,
-			itups,
-			tups_inserted;
+				itups,
+				tups_inserted;
 } v_i_state;
 
 /* non-export function prototypes */
@@ -97,7 +97,7 @@ static void UpdateIndexRelation(Oid indexoid, Oid heapoid,
 					bool primary,
 					bool isvalid);
 static void index_update_stats(Relation rel, bool hasindex, bool isprimary,
-							   Oid reltoastidxid, double reltuples);
+				   Oid reltoastidxid, double reltuples);
 static bool validate_index_callback(ItemPointer itemptr, void *opaque);
 static void validate_index_heapscan(Relation heapRelation,
 						Relation indexRelation,
@@ -235,8 +235,8 @@ ConstructTupleDescriptor(Relation heapRelation,
 			keyType = exprType(indexkey);
 
 			tuple = SearchSysCache(TYPEOID,
-								ObjectIdGetDatum(keyType),
-								0, 0, 0);
+								   ObjectIdGetDatum(keyType),
+								   0, 0, 0);
 			if (!HeapTupleIsValid(tuple))
 				elog(ERROR, "cache lookup failed for type %u", keyType);
 			typeTup = (Form_pg_type) GETSTRUCT(tuple);
@@ -500,7 +500,6 @@ UpdateIndexRelation(Oid indexoid,
  * reloptions: AM-specific options
  * isprimary: index is a PRIMARY KEY
  * isconstraint: index is owned by a PRIMARY KEY or UNIQUE constraint
- * constrOid: constraint OID to use if isconstraint is true
  * allow_system_table_mods: allow table to be a system catalog
  * skip_build: true to skip the index_build() step for the moment; caller
  *		must do it later (typically via reindex_index())
@@ -522,7 +521,6 @@ index_create(Oid heapRelationId,
 			 Datum reloptions,
 			 bool isprimary,
 			 bool isconstraint,
-			 Oid *constrOid,
 			 bool allow_system_table_mods,
 			 bool skip_build,
 			 bool concurrent,
@@ -586,10 +584,9 @@ index_create(Oid heapRelationId,
 
 	/*
 	 * We cannot allow indexing a shared relation after initdb (because
-	 * there's no way to make the entry in other databases' pg_class),
-	 * except during upgrade.
+	 * there's no way to make the entry in other databases' pg_class).
 	 */
-	if (shared_relation &&  !IsBootstrapProcessingMode())
+	if (shared_relation && !IsBootstrapProcessingMode())
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("shared indexes cannot be created after initdb")));
@@ -631,15 +628,18 @@ index_create(Oid heapRelationId,
 	 *
 	 * The OID will be the relfilenode as well, so make sure it doesn't
 	 * collide with either pg_class OIDs or existing physical files.
+	 *
+	 * (In GPDB, heap_create can choose a different relfilenode, in a QE node,
+	 * if the one we choose is already in use.)
 	 */
 	if (!OidIsValid(indexRelationId))
-		indexRelationId = GetNewRelFileNode(tableSpaceId, shared_relation,
-											pg_class);
-	else
-		if (IsUnderPostmaster)
-		{
-			CheckNewRelFileNodeIsOk(indexRelationId, tableSpaceId, shared_relation, pg_class);
-		}
+	{
+		if (Gp_role == GP_ROLE_EXECUTE || IsBinaryUpgrade)
+			indexRelationId = GetPreassignedOidForRelation(namespaceId, indexRelationName);
+		else
+			indexRelationId = GetNewRelFileNode(tableSpaceId, shared_relation,
+												pg_class);
+	}
 
 	/*
 	 * create the index relation's relcache entry and physical disk file. (If
@@ -730,6 +730,7 @@ index_create(Oid heapRelationId,
 							gp_relation_node,
 							indexRelation->rd_id,
 							indexRelation->rd_rel->relname.data,
+							indexRelation->rd_rel->reltablespace,
 							indexRelation->rd_rel->relfilenode,
 							/* segmentFileNum */ 0,
 							/* updateIndex */ true,
@@ -790,6 +791,7 @@ index_create(Oid heapRelationId,
 		{
 			char		constraintType;
 			const char *constraintName = indexRelationName;
+			Oid			conOid;
 
 			if ( altConName )
 			{
@@ -824,33 +826,31 @@ index_create(Oid heapRelationId,
 			if (indexInfo->ii_Expressions)
 				elog(ERROR, "constraints cannot have index expressions");
 
-			Insist(constrOid != NULL);
-			*constrOid = CreateConstraintEntry(constraintName,
-											   *constrOid,
-											   namespaceId,
-											   constraintType,
-											   false,		/* isDeferrable */
-											   false,		/* isDeferred */
-											   heapRelationId,
-											   indexInfo->ii_KeyAttrNumbers,
-											   indexInfo->ii_NumIndexAttrs,
-											   InvalidOid,	/* no domain */
-											   InvalidOid,	/* no foreign key */
-											   NULL,
-											   NULL,
-											   NULL,
-											   NULL,
-											   0,
-											   ' ',
-											   ' ',
-											   ' ',
-											   InvalidOid,	/* no associated index */
-											   NULL,		/* no check constraint */
-											   NULL,
-											   NULL);
+			conOid = CreateConstraintEntry(constraintName,
+										   namespaceId,
+										   constraintType,
+										   false,		/* isDeferrable */
+										   false,		/* isDeferred */
+										   heapRelationId,
+										   indexInfo->ii_KeyAttrNumbers,
+										   indexInfo->ii_NumIndexAttrs,
+										   InvalidOid,	/* no domain */
+										   InvalidOid,	/* no foreign key */
+										   NULL,
+										   NULL,
+										   NULL,
+										   NULL,
+										   0,
+										   ' ',
+										   ' ',
+										   ' ',
+										   InvalidOid,	/* no associated index */
+										   NULL,		/* no check constraint */
+										   NULL,
+										   NULL);
 
 			referenced.classId = ConstraintRelationId;
-			referenced.objectId = *constrOid;
+			referenced.objectId = conOid;
 			referenced.objectSubId = 0;
 
 			recordDependencyOn(&myself, &referenced, DEPENDENCY_INTERNAL);
@@ -1124,7 +1124,7 @@ index_drop(Oid indexId)
  * just once per command, and then use it for (potentially) many tuples.
  * ----------------
  */
-struct IndexInfo *
+IndexInfo *
 BuildIndexInfo(Relation index)
 {
 	IndexInfo  *ii = makeNode(IndexInfo);
@@ -1156,8 +1156,6 @@ BuildIndexInfo(Relation index)
 	/* initialize index-build state to default */
 	ii->ii_Concurrent = false;
 	ii->ii_BrokenHotChain = false;
-
-	ii->opaque = NULL;
 
 	return ii;
 }
@@ -1416,18 +1414,11 @@ index_update_stats(Relation rel, bool hasindex, bool isprimary,
  * Replaces relfilenode and updates pg_class / gp_relation_node.
  * If the updating relation is gp_relation_node's index, the caller
  * should rebuild the index by index_build().
- *
- * GPDB: you can pass newrelfilenode to assign a particular relfilenode. If
- * InvalidOid, an unused one is allocated.
  */
-Oid
+void
 setNewRelfilenode(Relation relation, TransactionId freezeXid)
 {
-	return setNewRelfilenodeToOid(relation, freezeXid, InvalidOid);
-}
-Oid
-setNewRelfilenodeToOid(Relation relation, TransactionId freezeXid, Oid newrelfilenode)
-{
+	Oid			newrelfilenode;
 	RelFileNode newrnode;
 	SMgrRelation srel;
 	Relation	pg_class;
@@ -1450,25 +1441,10 @@ setNewRelfilenodeToOid(Relation relation, TransactionId freezeXid, Oid newrelfil
 			freezeXid == InvalidTransactionId) ||
 		   TransactionIdIsNormal(freezeXid));
 
-	if (newrelfilenode == InvalidOid)
-	{
-		/* Allocate a new relfilenode */
-		newrelfilenode = GetNewRelFileNode(relation->rd_rel->reltablespace,
-										   relation->rd_rel->relisshared,
-										   NULL);
-
-		if (Gp_role == GP_ROLE_EXECUTE)
-			elog(DEBUG1, "setNewRelfilenode called in EXECUTE mode, "
-				 "newrelfilenode=%d", newrelfilenode);
-	}
-	else
-	{
-		CheckNewRelFileNodeIsOk(newrelfilenode, relation->rd_rel->reltablespace,
-								relation->rd_rel->relisshared, NULL);
-
-		elog(DEBUG3, "setNewRelfilenodeToOid called.  newrelfilenode = %d",
-			 newrelfilenode);
-	}
+	/* Allocate a new relfilenode */
+	newrelfilenode = GetNewRelFileNode(relation->rd_rel->reltablespace,
+									   relation->rd_rel->relisshared,
+									   NULL);
 
 	/*
 	 * Find the pg_class tuple for the given relation.	This is not used
@@ -1574,6 +1550,7 @@ setNewRelfilenodeToOid(Relation relation, TransactionId freezeXid, Oid newrelfil
 						gp_relation_node,
 						relation->rd_id,
 						NameStr(relation->rd_rel->relname),
+						relation->rd_rel->reltablespace,
 						newrelfilenode,
 						/* segmentFileNum */ 0,
 						/* updateIndex */ !is_gp_relation_node_index,
@@ -1591,8 +1568,6 @@ setNewRelfilenodeToOid(Relation relation, TransactionId freezeXid, Oid newrelfil
 
 	/* Mark the rel as having a new relfilenode in current transaction */
 	RelationCacheMarkNewRelfilenode(relation);
-
-	return newrelfilenode;
 }
 
 
@@ -1733,6 +1708,7 @@ index_build(Relation heapRelation,
 	/* Make the updated versions visible */
 	CommandCounterIncrement();
 }
+
 
 /*
  * IndexBuildScan - scan the heap, or the append-only row, or the append-only
@@ -2080,7 +2056,7 @@ IndexBuildHeapScan(Relation heapRelation,
 								  HeapTupleHeaderGetXmax(heapTuple->t_data)))
 					{
 						/*
-						 * GPDB_83MERGE_FIXME:
+						 * GPDB_83_MERGE_FIXME:
 						 *
 						 * Before the 8.3 merge, we also didn't throw an error if
 						 * it was a bitmap index. The old comment didn't explain why,
@@ -2270,25 +2246,13 @@ IndexBuildAppendOnlyRowScan(Relation parentRelation,
 	if (!OidIsValid(parentRelation->rd_appendonly->blkdirrelid) ||
 		!OidIsValid(parentRelation->rd_appendonly->blkdiridxid))
 	{
-		IndexInfoOpaque *opaque;
-
 		if (indexInfo->ii_Concurrent)
 			ereport(ERROR,
 					(errcode(ERRCODE_GP_COMMAND_ERROR),
 					 errmsg("Cannot create index concurrently. Create an index non-concurrently "
 					        "before creating an index concurrently in an appendonly table.")));
-		
-		/* Obtain the oids from IndexInfo. */
-		Assert(indexInfo->opaque != NULL);
 
-		opaque = (IndexInfoOpaque *)indexInfo->opaque;
-		
-		Assert(OidIsValid(opaque->blkdirRelOid) && OidIsValid(opaque->blkdirIdxOid));
-		AlterTableCreateAoBlkdirTableWithOid(RelationGetRelid(parentRelation),
-											 opaque->blkdirRelOid,
-											 opaque->blkdirIdxOid,
-											 &opaque->blkdirComptypeOid,
-											 false);
+		AlterTableCreateAoBlkdirTable(RelationGetRelid(parentRelation), false);
 
 		aoscan->buildBlockDirectory = true;
 		aoscan->blockDirectory =
@@ -2420,26 +2384,14 @@ IndexBuildAppendOnlyColScan(Relation parentRelation,
 
 	if (!OidIsValid(blkdirrelid) || !OidIsValid(blkdiridxid))
 	{
-		IndexInfoOpaque *opaque;
-		
 		if (indexInfo->ii_Concurrent)
 			ereport(ERROR,
 					(errcode(ERRCODE_GP_COMMAND_ERROR),
 					 errmsg("Cannot create index concurrently. Create an index non-concurrently "
 					        "before creating an index concurrently in an appendonly table.")));
 
-		/* Obtain the oids from IndexInfo. */
-		Assert(indexInfo->opaque != NULL);
+		AlterTableCreateAoBlkdirTable(RelationGetRelid(parentRelation), false);
 
-		opaque = (IndexInfoOpaque *)indexInfo->opaque;
-		
-		Assert(OidIsValid(opaque->blkdirRelOid) && OidIsValid(opaque->blkdirIdxOid));
-		AlterTableCreateAoBlkdirTableWithOid(RelationGetRelid(parentRelation),
-											 opaque->blkdirRelOid,
-											 opaque->blkdirIdxOid,
-											 &opaque->blkdirComptypeOid,
-											 false);
-		
 		aocsscan->buildBlockDirectory = true;
 		aocsscan->blockDirectory =
 			(AppendOnlyBlockDirectory *)palloc0(sizeof(AppendOnlyBlockDirectory));
@@ -2601,7 +2553,6 @@ validate_index(Oid heapId, Oid indexId, Snapshot snapshot)
 	ivinfo.message_level = DEBUG2;
 	ivinfo.num_heap_tuples = -1;
 	ivinfo.strategy = NULL;
-	ivinfo.extra_oids = NIL;
 	state.tuplesort = NULL;
 
 	PG_TRY();
@@ -3018,109 +2969,21 @@ IndexGetRelation(Oid indexId)
 }
 
 /*
- * createIndexInfoOpaque: create the opaque value in indexInfo
- * based on the given list of OIDs passed from reindex_index().
- *
- * The extra_oids contains 2 OID values. They are used by
- * the bitmap indexes to create their internal heap and btree.
- * See reindex_index() for more info.
+ * reindex_index - This routine is used to recreate a single index
  */
-static void
-createIndexInfoOpaque(List *extra_oids,
-					  bool isBitmapIndex,
-					  IndexInfo *indexInfo)
+void
+reindex_index(Oid indexId)
 {
-	Assert(extra_oids != NULL &&
-		   list_length(extra_oids) == 2);
-	Assert(indexInfo != NULL);
-	Assert(indexInfo->opaque == NULL);
-
-	indexInfo->opaque = (void*)palloc0(sizeof(IndexInfoOpaque));
-	
-	ListCell *lc = list_head(extra_oids);
-
-	((IndexInfoOpaque *)indexInfo->opaque)->heapRelfilenode =
-		lfirst_oid(lc);
-	lc = lnext(lc);
-	((IndexInfoOpaque *)indexInfo->opaque)->indexRelfilenode =
-		lfirst_oid(lc);
-	lc = lnext(lc);
-
-#ifdef USE_ASSERT_CHECKING
-	if (isBitmapIndex)
-	{
-		Assert(OidIsValid(((IndexInfoOpaque *)indexInfo->opaque)->heapRelfilenode));
-		Assert(OidIsValid(((IndexInfoOpaque *)indexInfo->opaque)->indexRelfilenode));
-	}
-	
-	else
-	{
-		Assert(!OidIsValid(((IndexInfoOpaque *)indexInfo->opaque)->heapRelfilenode));
-		Assert(!OidIsValid(((IndexInfoOpaque *)indexInfo->opaque)->indexRelfilenode));
-	}
-#endif
-}
-
-/*
- * generateExtraOids: generate the given number of extra Oids.
- *
- * If genNewOid is true, all generated OIDs will be valid. Otherwise,
- * all OIDs will be InvalidOid.
- */
-static List *
-generateExtraOids(int num_extra_oids,
-				  Oid reltablespace,
-				  bool relisshared,
-				  bool genNewOid)
-{
-	List *extra_oids = NIL;
-	
-	Assert(num_extra_oids > 0);
-	
-	for (int no = 0; no < num_extra_oids; no++)
-	{
-		Oid newOid = InvalidOid;
-		if (genNewOid)
-			newOid = GetNewRelFileNode(reltablespace,
-									   relisshared,
-									   NULL);
-		
-		extra_oids = lappend_oid(extra_oids, newOid);
-	}
-
-	return extra_oids;
-}
-
-/*
- * reindex_index - This routine is used to recreate a single index.
- *
- * GPDB: we return the new relfilenode for transmission to QEs. If
- * newrelfilenode is valid, we use that Oid instead.
- *
- * XXX The bitmap index requires two additional oids for its internal
- * heap and index. We pass those in as extra_oids. If there are no
- * such oids, this function generates them and pass them out to
- * the caller.
- *
- * The extra_oids list always contain 2 values. If the index is
- * a bitmap index, those two values are valid OIDs. Otherwise,
- * they are InvalidOids.
- */
-Oid
-reindex_index(Oid indexId, Oid newrelfilenode, List **extra_oids)
-{
-	Relation		iRel,
-					heapRelation,
-					pg_index;
-	Oid				heapId;
-	bool			inplace;
-	HeapTuple		indexTuple;
-	Form_pg_index	indexForm;
-	Oid				retrelfilenode;
-	Oid				namespaceId;
+	Relation	iRel,
+				heapRelation,
+				pg_index;
+	Oid			heapId;
+	bool		inplace;
+	HeapTuple	indexTuple;
+	Form_pg_index indexForm;
+	Oid			namespaceId;
 
 	Assert(OidIsValid(indexId));
-	Assert(extra_oids != NULL);
 
 	/*
 	 * Open and lock the parent heap relation.	ShareLock is sufficient since
@@ -3193,43 +3056,13 @@ reindex_index(Oid indexId, Oid newrelfilenode, List **extra_oids)
 						iRel, 
 						0,
 						/* markPersistentAsPhysicallyTruncated */ true);
-
-			retrelfilenode = iRel->rd_rel->relfilenode;
-			Assert(retrelfilenode == newrelfilenode ||
-				   !OidIsValid(newrelfilenode));
 		}
 		else
 		{
 			/*
 			 * We'll build a new physical relation for the index.
 			 */
-			if (OidIsValid(newrelfilenode))
-			{
-				setNewRelfilenodeToOid(iRel, InvalidTransactionId, newrelfilenode);
-				retrelfilenode = newrelfilenode;
-			}
-			else
-			{
-				retrelfilenode = setNewRelfilenode(iRel, InvalidTransactionId);
-
-				Assert(*extra_oids == NULL);
-
-				/*
-				 * If this is a bitmap index, we generate two more relfilenodes
-				 * for its internal heap and index.
-				 */
-				*extra_oids = generateExtraOids(2,
-												iRel->rd_rel->reltablespace,
-												iRel->rd_rel->relisshared,
-												RelationIsBitmapIndex(iRel));
-
-			}
-			
-
-			/* Store extra_oids into indexInfo->opaque */
-			createIndexInfoOpaque(*extra_oids,
-								  RelationIsBitmapIndex(iRel),
-								  indexInfo);
+			setNewRelfilenode(iRel, InvalidTransactionId);
 		}
 
 		/* Initialize the index and rebuild */
@@ -3328,8 +3161,6 @@ reindex_index(Oid indexId, Oid newrelfilenode, List **extra_oids)
 	/* Close rels, but keep locks */
 	index_close(iRel, NoLock);
 	heap_close(heapRelation, NoLock);
-
-	return retrelfilenode;
 }
 
 /*
@@ -3339,18 +3170,11 @@ reindex_index(Oid indexId, Oid newrelfilenode, List **extra_oids)
  * Returns true if any indexes were rebuilt.  Note that a
  * CommandCounterIncrement will occur after each index rebuild.
  *
- * If build_map is true, build a map of index relation OID -> new relfilenode.
- * If it is false but *oidmap is valid and we're on a QE, use the
- * new relfilenode specified in the map.
+ * In GPDB, if 'toast_too' is true, we also reindex auxiliary AO heap
+ * tables: AO segments, AO block directory, and AO visibilitymap.
  */
 bool
-reindex_relation(Oid relid, 
-		bool toast_too, 
-		bool aoseg_too, 
-		bool aoblkdir_too,
-		bool aovisimap_too,
-		List **oidmap,
-		bool build_map)
+reindex_relation(Oid relid, bool toast_too)
 {
 	Relation	rel;
 	Oid			toast_relid;
@@ -3414,73 +3238,13 @@ reindex_relation(Oid relid,
 	foreach(indexId, indexIds)
 	{
 		Oid			indexOid = lfirst_oid(indexId);
-		Oid			newrelfilenode;
-		Oid			mapoid = InvalidOid;
-		List        *extra_oids = NIL;
 
 		if (is_pg_class)
 			RelationSetIndexList(rel, doneIndexes, InvalidOid);
 
-		if (Gp_role == GP_ROLE_EXECUTE && !build_map && oidmap &&
-			*oidmap)
-		{
-			ListCell *c;
-
-			/* Yes, this is O(N^2) but N is small */
-			foreach(c, *oidmap)
-			{
-				List *map = lfirst(c);
-				Oid ind = linitial_oid(map);
-
-				if (ind == indexOid)
-				{
-					mapoid = lsecond_oid(map);
-					
-					/*
-					 * The map should contain more than 2 OIDs (the OID of the
-					 * index and its new relfilenode), to support the bitmap
-					 * index, see reindex_index() for more info. Construct
-					 * the extra_oids list by skipping the first two OIDs.
-					 */
-					Assert(list_length(map) > 2);
-					extra_oids = list_copy_tail(map, 2);
-
-					break;
-				}
-			}
-
-			if (!OidIsValid(mapoid))
-			{
-				/*
-				 * Apparently, corresponding mapoid for indexOid was not
-				 * found. This could happen if a user creates a new
-				 * index while reindex_relation on the parent relation is
-				 * in progress. Mention it and move on.
-				 */
-				elog(LOG, "index with OID %u not present in the index"
-						  " oid map sent by master. skipping it.", indexOid);
-				continue;
-			}
-		}
-
-		elog(DEBUG5, "reindexing index with OID %u (supplied %u as new OID)",
-			 indexOid, mapoid);
-
-		newrelfilenode = reindex_index(indexOid, mapoid, &extra_oids);
-
-		Assert(!OidIsValid(mapoid) || newrelfilenode == mapoid);
+		reindex_index(indexOid);
 
 		CommandCounterIncrement();
-
-		if (oidmap && build_map)
-		{
-			List *map = list_make2_oid(indexOid, newrelfilenode);
-
-			Assert(extra_oids != NULL);
-			map = list_concat(map, extra_oids);
-
-			*oidmap = lappend(*oidmap, map);
-		}
 
 		if (is_pg_class)
 			doneIndexes = lappend_oid(doneIndexes, indexOid);
@@ -3503,11 +3267,10 @@ reindex_relation(Oid relid,
 	 * still hold the lock on the master table.
 	 */
 	if (toast_too && OidIsValid(toast_relid))
-		result |= reindex_relation(toast_relid, false, false, false, false,
-									oidmap, build_map);
+		result |= reindex_relation(toast_relid, false);
 
 	/* Obtain the aoseg_relid and aoblkdir_relid if the relation is an AO table. */
-	if ((aoseg_too || aoblkdir_too || aovisimap_too) && relIsAO)
+	if (toast_too && relIsAO)
 		GetAppendOnlyEntryAuxOids(relid, SnapshotNow,
 								  &aoseg_relid,
 								  &aoblkdir_relid, NULL,
@@ -3517,25 +3280,22 @@ reindex_relation(Oid relid,
 	 * If an AO rel has a secondary segment list rel, reindex that too while we
 	 * still hold the lock on the master table.
 	 */
-	if (aoseg_too && OidIsValid(aoseg_relid))
-		result |= reindex_relation(aoseg_relid, false, false, false, false,
-									oidmap, build_map);
+	if (toast_too && OidIsValid(aoseg_relid))
+		result |= reindex_relation(aoseg_relid, false);
 
 	/*
 	 * If an AO rel has a secondary block directory rel, reindex that too while we
 	 * still hold the lock on the master table.
 	 */
-	if (aoblkdir_too && OidIsValid(aoblkdir_relid))
-		result |= reindex_relation(aoblkdir_relid, false, false, false, false,
-									oidmap, build_map);
+	if (toast_too && OidIsValid(aoblkdir_relid))
+		result |= reindex_relation(aoblkdir_relid, false);
 	
 	/*
 	 * If an AO rel has a secondary visibility map rel, reindex that too while we
 	 * still hold the lock on the master table.
 	 */
-	if (aovisimap_too && OidIsValid(aovisimap_relid))
-		result |= reindex_relation(aovisimap_relid, false, false, false, false,
-									oidmap, build_map);
+	if (toast_too && OidIsValid(aovisimap_relid))
+		result |= reindex_relation(aovisimap_relid, false);
 
 	return result;
 }

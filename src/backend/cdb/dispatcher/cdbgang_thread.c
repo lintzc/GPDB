@@ -65,7 +65,7 @@ CreateGangFunc pCreateGangFuncThreaded = createGang_thread;
 static Gang *
 createGang_thread(GangType type, int gang_id, int size, int content)
 {
-	Gang *newGangDefinition;
+	Gang *newGangDefinition = NULL;
 	SegmentDatabaseDescriptor *segdbDesc = NULL;
 	DoConnectParms *doConnectParmsAr = NULL;
 	DoConnectParms *pParms = NULL;
@@ -89,7 +89,7 @@ createGang_thread(GangType type, int gang_id, int size, int content)
 
 	/* Writer gang is created before reader gangs. */
 	if (type == GANGTYPE_PRIMARY_WRITER)
-		Insist(!gangsExist());
+		Insist(!GangsExist());
 
 	/* Check writer gang firstly*/
 	if (type != GANGTYPE_PRIMARY_WRITER && !isPrimaryWriterGangAlive())
@@ -100,9 +100,12 @@ createGang_thread(GangType type, int gang_id, int size, int content)
 	initPQExpBuffer(&create_gang_error);
 
 create_gang_retry:
-	/* If we're in a retry, we may need to reset our initial state, a bit */
-	newGangDefinition = NULL;
-	doConnectParmsAr = NULL;
+	/*
+	 * If we're in a retry, we may need to reset our initial state a bit. We
+	 * also want to ensure that all resources have been released.
+	 */
+	Assert(newGangDefinition == NULL);
+	Assert(doConnectParmsAr == NULL);
 	successful_connections = 0;
 	in_recovery_mode_count = 0;
 	threadCount = 0;
@@ -220,9 +223,9 @@ create_gang_retry:
 		{
 			/*
 			 * Retry for non-writer gangs is meaningless because
-			 * writer gang must has gone when QE is in recovery mode
+			 * writer gang must be gone when QE is in recovery mode
 			 */
-			disconnectAndDestroyGang(newGangDefinition);
+			DisconnectAndDestroyGang(newGangDefinition);
 			newGangDefinition = NULL;
 	
 			ELOG_DISPATCHER_DEBUG("createGang: gang creation failed, but retryable.");
@@ -234,16 +237,16 @@ create_gang_retry:
 			goto create_gang_retry;
 		}
 
-		appendPQExpBuffer(&create_gang_error, "segments is in recovery mode\n");
+		appendPQExpBuffer(&create_gang_error, "segment(s) are in recovery mode\n");
 	}
 	
 exit:
 	if(newGangDefinition != NULL)
-		disconnectAndDestroyGang(newGangDefinition);
+		DisconnectAndDestroyGang(newGangDefinition);
 
 	if (type == GANGTYPE_PRIMARY_WRITER)
 	{
-		disconnectAndDestroyAllGangs(true);
+		DisconnectAndDestroyAllGangs(true);
 		CheckForResetSession();
 	}
 

@@ -14,6 +14,7 @@
 #ifndef CATALOG_H
 #define CATALOG_H
 
+#include "catalog/oid_dispatch.h"
 #include "utils/relcache.h"
 #include "utils/rel.h"
 
@@ -44,6 +45,6 @@ extern Oid	GetNewOid(Relation relation);
 extern Oid	GetNewOidWithIndex(Relation relation, Relation indexrel);
 extern Oid GetNewRelFileNode(Oid reltablespace, bool relisshared,
 				  Relation pg_class);
-extern bool CheckNewRelFileNodeIsOk(Oid newOid, Oid reltablespace, bool relisshared, Relation pg_class);
+extern bool CheckNewRelFileNodeIsOk(Oid newOid, Oid reltablespace, bool relisshared);
 
 #endif   /* CATALOG_H */

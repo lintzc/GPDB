@@ -8,7 +8,7 @@
 # ----------
 # The first group of parallel tests
 # ----------
-test: boolean char name varchar text int2 int4 int8 oid float4 float8 bit numeric txid uuid enum money
+test: boolean char name varchar text int2 int4 int8 oid float4 float8 bit numeric txid uuid enum money null
 
 # Depends on things setup during char, varchar and text
 test: strings
@@ -47,7 +47,7 @@ test: copy copyselect
 # ----------
 # Another group of parallel tests
 # ----------
-test: constraints create_misc create_aggregate create_operator vacuum drop_if_exists
+test: constraints create_misc create_aggregate create_operator vacuum drop_if_exists create_cast
 
 # 'inherit' test is disabled in GPDB. FIXME: why?
 #test: inherit
@@ -122,7 +122,7 @@ test: select_views portals_p2 cluster dependency guc tsearch tsdicts json
 # "plpgsql" cannot run concurrently with "rules"
 test: plancache limit copy2 temp domain rangefuncs prepare without_oid conversion truncate alter_table sequence polymorphism rowtypes xml
 
-# 83MERGE_FIXME: the largeobject test is temporarily disabled due to test errors
+# GPDB_83_MERGE_FIXME: the largeobject test is temporarily disabled due to test errors
 # test: largeobject
 
 # 'plpgsql' test is disabled in GPDB, because it produces a lot of errors on

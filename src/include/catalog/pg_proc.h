@@ -42,14 +42,14 @@ CATALOG(pg_proc,1255) BKI_BOOTSTRAP
 	Oid			prolang;		/* OID of pg_language entry */
 	float4		procost;		/* estimated execution cost */
 	float4		prorows;		/* estimated # of rows out (if proretset) */
-	Oid			provariadic;	/* pg_type.oid of variadic argument */
+	Oid			provariadic;	/* element type of variadic array, or 0 */
 	bool		proisagg;		/* is it an aggregate? */
 	bool		prosecdef;		/* security definer */
 	bool		proisstrict;	/* strict with respect to NULLs? */
 	bool		proretset;		/* returns a set? */
 	char		provolatile;	/* see PROVOLATILE_ categories below */
 	int2		pronargs;		/* number of arguments */
-	int2        pronargdefaults;        /* number of arguments with defaults */
+	int2		pronargdefaults;	/* number of arguments with defaults */
 	Oid			prorettype;		/* OID of result type */
 	bool		proiswin;		/* is it a window function? */
 
@@ -58,7 +58,7 @@ CATALOG(pg_proc,1255) BKI_BOOTSTRAP
 	Oid			proallargtypes[1];		/* all param types (NULL if IN only) */
 	char		proargmodes[1]; /* parameter modes (NULL if IN only) */
 	text		proargnames[1]; /* parameter names (NULL if no names) */
-	text        proargdefaults; /* list of expression trees for argument
+	text		proargdefaults; /* list of expression trees for argument
 								 * defaults (NULL if none) */
 	text		prosrc;			/* procedure source text */
 	bytea		probin;			/* secondary procedure definition field */
@@ -1232,11 +1232,6 @@ DESCR("convert text to char");
 DATA(insert OID = 946 (  text			   PGNSP PGUID 12 1 0 f f t f i 1 25 "18" _null_ _null_ _null_	char_text - _null_ _null_ ));
 DESCR("convert char to text");
 
-DATA(insert OID = 950 (  istrue			   PGNSP PGUID 12 1 0 f f f f i 1 16 "16" _null_ _null_ _null_	istrue - _null_ _null_ ));
-DESCR("bool is true (not false or unknown)");
-DATA(insert OID = 951 (  isfalse		   PGNSP PGUID 12 1 0 f f f f i 1 16 "16" _null_ _null_ _null_	isfalse - _null_ _null_ ));
-DESCR("bool is false (not true or unknown)");
-
 DATA(insert OID = 952 (  lo_open		   PGNSP PGUID 12 1 0 f f t f v 2 23 "26 23" _null_ _null_ _null_ lo_open - _null_ _null_ ));
 DESCR("large object open");
 DATA(insert OID = 953 (  lo_close		   PGNSP PGUID 12 1 0 f f t f v 1 23 "23" _null_ _null_ _null_	lo_close - _null_ _null_ ));
@@ -1328,10 +1323,6 @@ DESCR("equal");
 DATA(insert OID = 1026 (  timezone		   PGNSP PGUID 12 1 0 f f t f i 2 1114 "1186 1184" _null_ _null_ _null_ timestamptz_izone - _null_ _null_ ));
 DESCR("adjust timestamp to new time zone");
 
-DATA(insert OID = 1029 (  nullvalue		   PGNSP PGUID 12 1 0 f f f f i 1 16 "2276" _null_ _null_ _null_ nullvalue - _null_ _null_ ));
-DESCR("(internal)");
-DATA(insert OID = 1030 (  nonnullvalue	   PGNSP PGUID 12 1 0 f f f f i 1 16 "2276" _null_ _null_ _null_ nonnullvalue - _null_ _null_ ));
-DESCR("(internal)");
 DATA(insert OID = 1031 (  aclitemin		   PGNSP PGUID 12 1 0 f f t f s 1 1033 "2275" _null_ _null_ _null_	aclitemin - _null_ _null_ ));
 DESCR("I/O");
 DATA(insert OID = 1032 (  aclitemout	   PGNSP PGUID 12 1 0 f f t f s 1 2275 "1033" _null_ _null_ _null_	aclitemout - _null_ _null_ ));
@@ -1865,11 +1856,6 @@ DATA(insert OID = 1415 (  ishorizontal		PGNSP PGUID 12 1 0 f f t f i 1	16 "628" 
 DESCR("horizontal?");
 DATA(insert OID = 1416 (  point				PGNSP PGUID 12 1 0 f f t f i 1 600 "718" _null_ _null_ _null_ circle_center - _null_ _null_ ));
 DESCR("center of");
-
-DATA(insert OID = 1417 (  isnottrue			PGNSP PGUID 12 1 0 f f f f i 1 16 "16" _null_ _null_ _null_ isnottrue - _null_ _null_ ));
-DESCR("bool is not true (ie, false or unknown)");
-DATA(insert OID = 1418 (  isnotfalse		PGNSP PGUID 12 1 0 f f f f i 1 16 "16" _null_ _null_ _null_ isnotfalse - _null_ _null_ ));
-DESCR("bool is not false (ie, true or unknown)");
 
 DATA(insert OID = 1419 (  time				PGNSP PGUID 12 1 0 f f t f i 1 1083 "1186" _null_ _null_ _null_ interval_time - _null_ _null_ ));
 DESCR("convert interval to time");
@@ -4500,6 +4486,15 @@ DESCR("get set of in-progress txids in snapshot");
 DATA(insert OID = 2948 (  txid_visible_in_snapshot	PGNSP PGUID 12 1  0 f f t f i 2 16 "20 2970" _null_ _null_ _null_ txid_visible_in_snapshot - _null_ _null_ ));
 DESCR("is txid visible in snapshot?");
 
+/* Extensions */
+DATA(insert OID = 3082 (  pg_available_extensions		PGNSP PGUID 12 10 100 0 f f t t s 0 0 2249 f "" "{19,25,25}" "{o,o,o}" "{name,default_version,comment}" _null_ pg_available_extensions _null_ _null_ _null_ n ));
+DESCR("list available extensions");
+DATA(insert OID = 3083 (  pg_available_extension_versions	PGNSP PGUID 12 10 100 0 f f t t s 0 0 2249 f "" "{19,25,16,16,19,1003,25}" "{o,o,o,o,o,o,o}" "{name,version,superuser,relocatable,schema,requires,comment}" _null_ pg_available_extension_versions _null_ _null_ _null_ n ));
+DESCR("list available extension versions");
+DATA(insert OID = 3084 (  pg_extension_update_paths		PGNSP PGUID 12 10 100 0 f f t t s 1 0 2249 f "19" "{19,25,25,25}" "{i,o,o,o}" "{name,source,target,path}" _null_ pg_extension_update_paths _null_ _null_ _null_ n ));
+DESCR("list an extension's version update paths");
+DATA(insert OID = 3086 (  pg_extension_config_dump		PGNSP PGUID 12 1 0 0 f f t f v 2 0 2278 f "2205 25" _null_ _null_ _null_ _null_ pg_extension_config_dump _null_ _null_ _null_ n));
+DESCR("flag an extension's table contents to be emitted by pg_dump");
 
 /*
  * Include more definitions from pg_proc_gp.h, for GPDB-added functions. They
@@ -4582,8 +4577,7 @@ extern Oid ProcedureCreate(const char *procedureName,
 				Datum proconfig,
 				float4 procost,
 				float4 prorows,
-				char prodataaccess,
-				Oid procOid);
+				char prodataaccess);
 
 extern bool function_parse_error_transpose(const char *prosrc);
 

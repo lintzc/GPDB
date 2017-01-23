@@ -81,8 +81,6 @@ InsertAppendOnlyEntry(Oid relid,
 	values[Anum_pg_appendonly_visimaprelid - 1] = ObjectIdGetDatum(visimaprelid);
 	values[Anum_pg_appendonly_visimapidxid - 1] = ObjectIdGetDatum(visimapidxid);
 
-	values[Anum_pg_appendonly_version - 1] = test_appendonly_version_default;
-	
 	/*
 	 * form the tuple and insert it
 	 */
@@ -393,7 +391,7 @@ TransferDependencyLink(
 	Assert(OidIsValid(oid));
 
 	/* Delete old dependency */
-	count = deleteDependencyRecordsFor(RelationRelationId, oid);
+	count = deleteDependencyRecordsFor(RelationRelationId, oid, false);
 	if (count != 1)
 		elog(LOG, "expected one dependency record for %s table, oid %u, found %ld",
 			 tabletype, oid, count);

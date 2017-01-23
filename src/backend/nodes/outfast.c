@@ -697,6 +697,16 @@ _outOuterJoinInfo(StringInfo str, OuterJoinInfo *node)
  *****************************************************************************/
 
 static void
+_outCreateExtensionStmt(StringInfo str, CreateExtensionStmt *node)
+{
+	WRITE_NODE_TYPE("CREATEEXTENSIONSTMT");
+	WRITE_STRING_FIELD(extname);
+	WRITE_BOOL_FIELD(if_not_exists);
+	WRITE_NODE_FIELD(options);
+	WRITE_ENUM_FIELD(create_ext_state, CreateExtensionState);
+}
+
+static void
 _outCreateStmt(StringInfo str, CreateStmt *node)
 {
 	WRITE_NODE_TYPE("CREATESTMT");
@@ -711,20 +721,6 @@ _outCreateStmt(StringInfo str, CreateStmt *node)
 	WRITE_ENUM_FIELD(oncommit, OnCommitAction);
 	WRITE_STRING_FIELD(tablespacename);
 	WRITE_NODE_FIELD(distributedBy);
-	WRITE_OID_FIELD(oidInfo.relOid);
-	WRITE_OID_FIELD(oidInfo.comptypeOid);
-	WRITE_OID_FIELD(oidInfo.comptypeArrayOid);
-	WRITE_OID_FIELD(oidInfo.toastOid);
-	WRITE_OID_FIELD(oidInfo.toastIndexOid);
-	WRITE_OID_FIELD(oidInfo.toastComptypeOid);
-	WRITE_OID_FIELD(oidInfo.aosegOid);
-	WRITE_OID_FIELD(oidInfo.aosegComptypeOid);
-	WRITE_OID_FIELD(oidInfo.aovisimapOid);
-	WRITE_OID_FIELD(oidInfo.aovisimapIndexOid);
-	WRITE_OID_FIELD(oidInfo.aovisimapComptypeOid);
-	WRITE_OID_FIELD(oidInfo.aoblkdirOid);
-	WRITE_OID_FIELD(oidInfo.aoblkdirIndexOid);
-	WRITE_OID_FIELD(oidInfo.aoblkdirComptypeOid);
 	WRITE_CHAR_FIELD(relKind);
 	WRITE_CHAR_FIELD(relStorage);
 	/* policy omitted */
@@ -805,7 +801,6 @@ _outAlterPartitionCmd(StringInfo str, AlterPartitionCmd *node)
 	WRITE_NODE_FIELD(partid);
 	WRITE_NODE_FIELD(arg1);
 	WRITE_NODE_FIELD(arg2);
-	WRITE_NODE_FIELD(newOids);
 }
 
 static void
@@ -815,7 +810,6 @@ _outCreateDomainStmt(StringInfo str, CreateDomainStmt *node)
 	WRITE_NODE_FIELD(domainname);
 	WRITE_NODE_FIELD(typname);
 	WRITE_NODE_FIELD(constraints);
-	WRITE_OID_FIELD(domainOid);
 }
 
 static void
@@ -840,7 +834,6 @@ _outColumnDef(StringInfo str, ColumnDef *node)
 	WRITE_BOOL_FIELD(is_local);
 	WRITE_BOOL_FIELD(is_not_null);
 	WRITE_INT_FIELD(attnum);
-	WRITE_OID_FIELD(default_oid);
 	WRITE_NODE_FIELD(raw_default);
 	WRITE_STRING_FIELD(cooked_default);
 	WRITE_NODE_FIELD(constraints);
@@ -1076,7 +1069,6 @@ _outConstraint(StringInfo str, Constraint *node)
 	WRITE_NODE_TYPE("CONSTRAINT");
 
 	WRITE_STRING_FIELD(name);
-	WRITE_OID_FIELD(conoid);
 
 	WRITE_ENUM_FIELD(contype,ConstrType);
 
@@ -1116,8 +1108,6 @@ _outCreateQueueStmt(StringInfo str, CreateQueueStmt *node)
 
 	WRITE_STRING_FIELD(queue);
 	WRITE_NODE_FIELD(options); /* List of DefElem nodes */
-	WRITE_OID_FIELD(queueOid);
-	WRITE_NODE_FIELD(optids); /* List of oids for nodes */
 }
 
 static void
@@ -1127,7 +1117,6 @@ _outAlterQueueStmt(StringInfo str, AlterQueueStmt *node)
 
 	WRITE_STRING_FIELD(queue);
 	WRITE_NODE_FIELD(options); /* List of DefElem nodes */
-	WRITE_NODE_FIELD(optids); /* List of oids for nodes */
 }
 
 static void
@@ -1184,6 +1173,9 @@ _outNode(StringInfo str, void *obj)
 				break;
 			case T_QueryDispatchDesc:
 				_outQueryDispatchDesc(str,obj);
+				break;
+			case T_OidAssignment:
+				_outOidAssignment(str,obj);
 				break;
 			case T_Plan:
 				_outPlan(str, obj);
@@ -1328,9 +1320,6 @@ _outNode(StringInfo str, void *obj)
 				break;
 			case T_IntoClause:
 				_outIntoClause(str, obj);
-				break;
-			case T_TableOidInfo:
-				_outTableOidInfo(str, obj);
 				break;
 			case T_Var:
 				_outVar(str, obj);
@@ -1539,6 +1528,9 @@ _outNode(StringInfo str, void *obj)
 				break;
 			case T_AppendRelInfo:
 				_outAppendRelInfo(str, obj);
+				break;
+			case T_CreateExtensionStmt:
+				_outCreateExtensionStmt(str, obj);
 				break;
 
 
@@ -1987,6 +1979,12 @@ _outNode(StringInfo str, void *obj)
 
 			case T_AlterTypeStmt:
 				_outAlterTypeStmt(str, obj);
+				break;
+			case T_AlterExtensionStmt:
+				_outAlterExtensionStmt(str, obj);
+				break;
+			case T_AlterExtensionContentsStmt:
+				_outAlterExtensionContentsStmt(str, obj);
 				break;
 			case T_TupleDescNode:
 				_outTupleDescNode(str, obj);

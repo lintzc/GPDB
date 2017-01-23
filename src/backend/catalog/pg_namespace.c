@@ -28,7 +28,7 @@
  * ---------------
  */
 Oid
-NamespaceCreate(const char *nspName, Oid ownerId, Oid forceOid)
+NamespaceCreate(const char *nspName, Oid ownerId)
 {
 	Relation	nspdesc;
 	HeapTuple	tup;
@@ -37,6 +37,7 @@ NamespaceCreate(const char *nspName, Oid ownerId, Oid forceOid)
 	Datum		values[Natts_pg_namespace];
 	NameData	nname;
 	TupleDesc	tupDesc;
+	ObjectAddress myself;
 	int			i;
 
 	/* sanity checks */
@@ -67,10 +68,6 @@ NamespaceCreate(const char *nspName, Oid ownerId, Oid forceOid)
 
 	tup = heap_form_tuple(tupDesc, values, nulls);
 
-	if (forceOid != InvalidOid)
-		HeapTupleSetOid(tup, forceOid);		/* override heap_insert's OID
-											 * selection */
-
 	nspoid = simple_heap_insert(nspdesc, tup);
 	Assert(OidIsValid(nspoid));
 
@@ -80,6 +77,14 @@ NamespaceCreate(const char *nspName, Oid ownerId, Oid forceOid)
 
 	/* Record dependency on owner */
 	recordDependencyOnOwner(NamespaceRelationId, nspoid, ownerId);
+
+	/* Record dependencies */
+	myself.classId = NamespaceRelationId;
+	myself.objectId = nspoid;
+	myself.objectSubId = 0;
+
+	/* dependency on extension */
+	recordDependencyOnCurrentExtension(&myself, false);
 
 	return nspoid;
 }

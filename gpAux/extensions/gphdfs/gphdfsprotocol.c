@@ -90,10 +90,10 @@ getConnectorVersion()
 			return hdVer_to_connVer[i].connectorVersion;
 	}
 
-	ereport(ERROR, (errcode(ERRCODE_EXTERNAL_ROUTINE_EXCEPTION),
-					errmsg("target Hadoop version \"%s\" is not supported", gp_hadoop_target_version),
-					errhint("please use one of 'gphd-1.0', 'gphd-1.1', 'gphd-2.0', 'gpmr-1.0', 'gpmr-1.2', 'cdh3u2', 'cdh4.1'"),
-					errOmitLocation(true)));
+	ereport(ERROR,
+			(errcode(ERRCODE_EXTERNAL_ROUTINE_EXCEPTION),
+			 errmsg("target Hadoop version \"%s\" is not supported", gp_hadoop_target_version),
+			 errhint("please use one of 'gphd-1.0', 'gphd-1.1', 'gphd-2.0', 'gpmr-1.0', 'gpmr-1.2', 'cdh3u2', 'cdh4.1'")));
 
 	return "N/A";
 }
@@ -135,9 +135,9 @@ checkHadoopGUCs()
 	jarFD = BasicOpenFile(path.data, O_RDONLY | PG_BINARY, 0);
 	if (jarFD == -1)
 	{
-		ereport(ERROR, (errcode(ERRCODE_EXTERNAL_ROUTINE_EXCEPTION),
-						errmsg("cannot open Hadoop Cross Connect in %s: %m", path.data),
-						errOmitLocation(true)));
+		ereport(ERROR,
+				(errcode(ERRCODE_EXTERNAL_ROUTINE_EXCEPTION),
+				 errmsg("cannot open Hadoop Cross Connect in %s: %m", path.data)));
 	}
 	close(jarFD);
 
@@ -154,8 +154,7 @@ checkHadoopGUCs()
 		{
 			ereport(ERROR,
 					(errcode(ERRCODE_EXTERNAL_ROUTINE_EXCEPTION),
-							errmsg("cannot open gp_hadoop_home in %s: %m", gp_hadoop_home),
-							errOmitLocation(true)));
+					 errmsg("cannot open gp_hadoop_home in %s: %m", gp_hadoop_home)));
 		}
 		close(hdHomeFD);
 	}
@@ -204,6 +203,24 @@ quoteArgument(char* value)
 	appendStringInfoChar(&quotedVal, '\'');
 
 	return quotedVal.data;
+}
+
+static bool hasIllegalCharacters(char *str)
+{
+	if (str == NULL)
+	{
+		return false;
+	}
+
+	for (; *str; str++)
+	{
+		if (*str == '\\' || *str == '\'' || *str == '<' || *str == '>')
+		{
+			return true;
+		}
+	}
+
+	return false;
 }
 
 /**
@@ -299,6 +316,15 @@ static URL_FILE
 	 * Note: gp_hadoop_connector_version does not need to be quoted
 	 *       because we've verified it in checkHadoopGUCs().
 	 */
+
+	/* Note: if url is passed with E prefix, quote simply quote has no effect,
+	 * we filter some dangerous chararacters right now. */
+	char* url_user = EXTPROTOCOL_GET_URL(fcinfo);
+	if (hasIllegalCharacters(url_user))
+	{
+		ereport(ERROR, (0, errmsg("illegal char in url")));
+	}
+
 	url = quoteArgument(EXTPROTOCOL_GET_URL(fcinfo));
 	initStringInfo(&cmd);
 	appendStringInfo(&cmd, "%s%s %s %s %s", env_cmd.data, java_cmd, format,
@@ -520,6 +546,13 @@ gphdfsprotocol_validate_urls(PG_FUNCTION_ARGS)
             ereport(ERROR,
                     (errcode(ERRCODE_PROTOCOL_VIOLATION),
                      errmsg("number of URLs must be one")));
+
+	/* Check for illegal characters. */
+	char* url_user = EXTPROTOCOL_VALIDATOR_GET_NTH_URL(fcinfo, 1);
+	if (hasIllegalCharacters(url_user))
+	{
+		ereport(ERROR, (0, errmsg("illegal char in url")));
+	}
 
 	PG_RETURN_VOID();
 }

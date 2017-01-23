@@ -29,7 +29,6 @@ CATALOG(pg_appendonly,6105) BKI_WITHOUT_OIDS
     Oid             segrelid;           /* OID of aoseg table; 0 if none */
     Oid             blkdirrelid;        /* OID of aoblkdir table; 0 if none */
     Oid             blkdiridxid;        /* if aoblkdir table, OID of aoblkdir index */
-    int4            version;            /* version of MemTuples and block layout for this table */
 	Oid             visimaprelid;		/* OID of the aovisimap table */
 	Oid             visimapidxid;		/* OID of aovisimap index */
 } FormData_pg_appendonly;
@@ -62,9 +61,8 @@ typedef FormData_pg_appendonly *Form_pg_appendonly;
 #define Anum_pg_appendonly_segrelid         8
 #define Anum_pg_appendonly_blkdirrelid      9
 #define Anum_pg_appendonly_blkdiridxid      10
-#define Anum_pg_appendonly_version          11
-#define Anum_pg_appendonly_visimaprelid     12
-#define Anum_pg_appendonly_visimapidxid     13
+#define Anum_pg_appendonly_visimaprelid     11
+#define Anum_pg_appendonly_visimapidxid     12
 
 /*
  * pg_appendonly table values for FormData_pg_attribute.
@@ -83,9 +81,8 @@ typedef FormData_pg_appendonly *Form_pg_appendonly;
 { AppendOnlyRelationId, {"segrelid"},				26, -1, 4, 8, 0, -1, -1, true, 'p', 'i', false, false, false, true, 0 }, \
 { AppendOnlyRelationId, {"blkdirrelid"},			26, -1, 4, 10, 0, -1, -1, true, 'p', 'i', false, false, false, true, 0 }, \
 { AppendOnlyRelationId, {"blkdiridxid"},			26, -1, 4, 11, 0, -1, -1, true, 'p', 'i', false, false, false, true, 0 }, \
-{ AppendOnlyRelationId, {"version"},				23, -1, 4, 12, 0, -1, -1, true, 'p', 'i', false, false, false, true, 0 }, \
-{ AppendOnlyRelationId, {"visimaprelid"},			26, -1, 4, 13, 0, -1, -1, true, 'p', 'i', false, false, false, true, 0 }, \
-{ AppendOnlyRelationId, {"visimapidxid"},			26, -1, 4, 14, 0, -1, -1, true, 'p', 'i', false, false, false, true, 0 }
+{ AppendOnlyRelationId, {"visimaprelid"},			26, -1, 4, 12, 0, -1, -1, true, 'p', 'i', false, false, false, true, 0 }, \
+{ AppendOnlyRelationId, {"visimapidxid"},			26, -1, 4, 13, 0, -1, -1, true, 'p', 'i', false, false, false, true, 0 }
 
 /*
  * pg_appendonly table values for FormData_pg_class.
@@ -109,10 +106,12 @@ typedef enum AORelationVersion
 	AORelationVersion_Original =  1,		/* first valid version */
 	AORelationVersion_Aligned64bit = 2,		/* version where the fixes for AOBlock and MemTuple
 											 * were introduced, see MPP-7251 and MPP-7372. */
+	AORelationVersion_PG83 = 3,				/* Same as Aligned64bit, but numerics are stored
+											 * in the PostgreSQL 8.3 format. */
 	MaxAORelationVersion                    /* must always be last */
 } AORelationVersion;
 
-#define AORelationVersion_GetLatest() AORelationVersion_Aligned64bit
+#define AORelationVersion_GetLatest() AORelationVersion_PG83
 
 #define AORelationVersion_IsValid(version) \
 	(version > AORelationVersion_None && version < MaxAORelationVersion)
@@ -137,6 +136,13 @@ static inline void AORelationVersion_CheckValid(int version)
 	(version > AORelationVersion_Original) \
 )
 
-extern int test_appendonly_version_default;
+/*
+ * Are numerics stored in old, pre-PostgreSQL 8.3 format, and need converting?
+ */
+#define PG82NumericConversionNeeded(version) \
+( \
+	AORelationVersion_CheckValid(version), \
+	(version < AORelationVersion_PG83) \
+)
 
 #endif   /* PG_APPENDONLY_H */

@@ -56,8 +56,6 @@ extern Oid heap_create_with_catalog(const char *relname,
 						 Datum reloptions,
 						 bool allow_system_table_mods,
 						 bool valid_opts,
-						 Oid *comptypeOid, /* MPP */
-						 Oid *comptypeArrayOid, /* MPP */
 						 ItemPointer persistentTid,
 						 int64 *persistentSerialNum);
 
@@ -78,6 +76,7 @@ extern void InsertGpRelationNodeTuple(
 	Relation 		gp_relation_node,
 	Oid				relationId,
 	char			*relname,
+	Oid				tablespaceOid,
 	Oid				relation,
 	int32			segmentFileNum,
 	bool			updateIndex,
@@ -86,6 +85,7 @@ extern void InsertGpRelationNodeTuple(
 extern void UpdateGpRelationNodeTuple(
 		Relation	gp_relation_node,
 		HeapTuple	tuple,
+		Oid 		tablespaceOid,
 		Oid 		relation,
 		int32		segmentFileNum,
 		ItemPointer persistentTid,
@@ -98,8 +98,7 @@ extern List *AddRelationConstraints(Relation rel,
 						  List *rawColDefaults,
 						  List *constraints);
 
-extern Oid StoreAttrDefault(Relation rel, AttrNumber attnum, Node *expr,
-							Oid defoid);
+extern void StoreAttrDefault(Relation rel, AttrNumber attnum, Node *expr);
 
 extern Node *cookDefault(ParseState *pstate,
 			Node *raw_default,
@@ -113,7 +112,7 @@ extern int RemoveRelConstraints(Relation rel, const char *constrName,
 extern void DeleteRelationTuple(Oid relid);
 extern void DeleteAttributeTuples(Oid relid);
 extern void RemoveAttributeById(Oid relid, AttrNumber attnum);
-extern Oid RemoveAttrDefault(Oid relid, AttrNumber attnum,
+extern void RemoveAttrDefault(Oid relid, AttrNumber attnum,
 				  DropBehavior behavior, bool complain);
 extern void RemoveAttrDefaultById(Oid attrdefId);
 extern void RemoveStatistics(Oid relid, AttrNumber attnum);

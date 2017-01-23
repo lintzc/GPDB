@@ -23,7 +23,21 @@
 
 extern "C" {
 #include "utils/elog.h"
+#include "utils/palloc.h"
+#include "nodes/memnodes.h"
 }
+
+#define EXPAND_CREATE_ELOG(codegen_utils, elevel, ...)  \
+  codegen_utils->CreateElog(__FILE__, __LINE__, PG_FUNCNAME_MACRO, \
+                            elevel, ##__VA_ARGS__)
+
+#define EXPAND_CREATE_EREPORT(codegen_utils, elevel, ecode, errmsg_fmt, ...)  \
+  codegen_utils->CreateEreport(__FILE__, __LINE__, PG_FUNCNAME_MACRO, \
+                               TEXTDOMAIN, elevel, ecode, errmsg_fmt, \
+                               ##__VA_ARGS__)
+
+#define EXPAND_CREATE_PALLOC(codegen_utils, sz) \
+  codegen_utils->CreatePalloc(sz, __FILE__, PG_FUNCNAME_MACRO, __LINE__)
 
 namespace gpcodegen {
 
@@ -50,18 +64,21 @@ class GpCodegenUtils : public CodegenUtils {
    *          straight out of the compiled module back to the last location in GPDB
    *          that setjump was called.
    *
+   * @param file_name   name of the file from which CreateElog is called
+   * @param lineno      number of the line in the file from which CreateElog is called
+   * @param func_name   name of the function that calls CreateElog
    * @param llvm_elevel llvm::Value pointer to an integer representing the error level
    * @param llvm_fmt    llvm::Value pointer to the format string
    * @tparam args       llvm::Value pointers to arguments to elog()
    */
   template<typename... V>
   void CreateElog(
+      const char* file_name,
+      int lineno,
+      const char* func_name,
       llvm::Value* llvm_elevel,
       llvm::Value* llvm_fmt,
       const V ... args ) {
-    assert(NULL != llvm_elevel);
-    assert(NULL != llvm_fmt);
-
     llvm::Function* llvm_elog_start =
         GetOrRegisterExternalFunction(elog_start, "elog_start");
     llvm::Function* llvm_elog_finish =
@@ -69,16 +86,15 @@ class GpCodegenUtils : public CodegenUtils {
 
     ir_builder()->CreateCall(
         llvm_elog_start, {
-            GetConstant(""),   // Filename
-            GetConstant(0),    // line number
-            GetConstant("")    // function name
-        });
+            GetConstant(file_name),   // Filename
+            GetConstant(lineno),    // line number
+            GetConstant(func_name)    // function name
+    });
     ir_builder()->CreateCall(
         llvm_elog_finish, {
             llvm_elevel,
             llvm_fmt,
-            args...
-        });
+            args... });
   }
 
   /*
@@ -91,16 +107,155 @@ class GpCodegenUtils : public CodegenUtils {
    *          straight out of the compiled module back to the last location in GPDB
    *          that setjump was called.
    *
-   * @param elevel Integer representing the error level
-   * @param fmt    Format string
-   * @tparam args  llvm::Value pointers to arguments to elog()
+   * @param file_name   name of the file from which CreateElog is called
+   * @param lineno      number of the line in the file from which CreateElog is called
+   * @param func_name   name of the function that calls CreateElog
+   * @param elevel      Integer representing the error level
+   * @param fmt         Format string
+   * @tparam args       llvm::Value pointers to arguments to elog()
    */
   template<typename... V>
-    void CreateElog(
-        int elevel,
-        const char* fmt,
-        const V ... args ) {
-    CreateElog(GetConstant(elevel), GetConstant(fmt), args...);
+  void CreateElog(
+      const char* file_name,
+      int lineno,
+      const char* func_name,
+      int elevel,
+      const char* fmt,
+      const V ... args ) {
+    CreateElog(file_name, lineno, func_name, GetConstant(elevel),
+               GetConstant(fmt), args...);
+  }
+
+
+  /*
+   * @brief Create LLVM instructions to implement ereport; but only for
+   * ereport calls of the form: ereport(elevel, (errcode(code), errmsg(fmt, args...)).
+   *
+   * The reason for support only this form is because the ereport() mechanism is
+   * very flexible because of overloaded C macros - so much so that it is tricky
+   * to implement using the LLVM API. For example, it may appear from the above
+   * code that errcode and errmsg are called before any errstart or errfinish.
+   * However because of the way the macro is implemented, errcode and errmsg are
+   * called *after* errstart and only if errstart returns true
+   *
+   * @note This function calls the following external functions: errstart, errcode, errmsg
+   * and errfinish.
+   *
+   * @param file_name   name of the file from which CreateEreport is called
+   * @param lineno      number of the line in the file from which CreateEreport is called
+   * @param func_name   name of the function that calls CreateEreport
+   * @param domain      llvm::Value pointer to message domain of the report
+   * @param elevel      llvm::Value pointer to integer representing the error level
+   * @param ecode       llvm::Value pointer to error code passed to a call to
+   * @param errmsg_fmt  llvm::Value pointer to format string
+   * @tparam args       llvm::Value pointers to arguments to elog()
+   */
+  template<typename... V>
+  void CreateEreport(
+      const char* file_name,
+      int lineno,
+      const char* func_name,
+      const char* domain,
+      int elevel,
+      int ecode,
+      const char* errmsg_fmt,
+      const V ... args ) {
+    CreateEreport(file_name,
+                  lineno,
+                  func_name,
+                  GetConstant(domain),
+                  GetConstant(elevel),
+                  GetConstant(ecode),
+                  GetConstant(errmsg_fmt));
+  }
+
+  /*
+   * @brief Create LLVM instructions to implements ereport; but only for
+   * ereport calls of the form: ereport(elevel, (errcode(code), errmsg(fmt, args...)).
+   *
+   * @param file_name   name of the file from which CreateEreport is called
+   * @param lineno      number of the line in the file from which CreateEreport is called
+   * @param func_name   name of the function that calls CreateEreport
+   * @param domain      message domain of the report
+   * @param elevel      Integer representing the error level
+   * @param ecode       error code passed to a call to
+   * @param errmsg_fmt  Format string
+   * @tparam args       llvm::Value pointers to arguments to elog()
+   */
+  template<typename... V>
+  void CreateEreport(
+      const char* file_name,
+      int lineno,
+      const char* func_name,
+      llvm::Value* domain,
+      llvm::Value* elevel,
+      llvm::Value* ecode,
+      llvm::Value* errmsg_fmt,
+      const V ... args ) {
+    // Make sure the external functions required are available
+    llvm::Function* llvm_errstart =
+        GetOrRegisterExternalFunction(errstart, "errstart");
+    llvm::Function* llvm_errcode =
+        GetOrRegisterExternalFunction(errcode, "errcode");
+    llvm::Function* llvm_errmsg =
+        GetOrRegisterExternalFunction(errmsg, "errmsg");
+    llvm::Function* llvm_errfinish =
+        GetOrRegisterExternalFunction(errfinish, "errfinish");
+
+    auto irb = ir_builder();
+
+    // Retrive the current function to create new blocks
+    llvm::Function* current_function = irb->GetInsertBlock()->getParent();
+
+    // Case when errstart returns true
+    llvm::BasicBlock* errfinish_block =
+        CreateBasicBlock("errfinish", current_function);
+    // Case when errstart returns false
+    llvm::BasicBlock* rest_ereport_block =
+        CreateBasicBlock("rest_ereport", current_function);
+    // Case when elevel >= ERROR
+    llvm::BasicBlock* abort_block =
+        CreateBasicBlock("abort", current_function);
+    // Done with all cases
+    llvm::BasicBlock* end_ereport_block =
+        CreateBasicBlock("end_ereport", current_function);
+
+
+    // if (errstart(...)) errfinish(...) {{{
+    llvm::Value* llvm_ret = irb->CreateCall(
+        llvm_errstart, {
+            elevel,
+            GetConstant(file_name),
+            GetConstant(lineno),
+            GetConstant(func_name),
+            domain
+        });
+
+    irb->CreateCondBr(llvm_ret,
+                      errfinish_block /* true */,
+                      rest_ereport_block /* false */);
+
+    irb->SetInsertPoint(errfinish_block);
+    irb->CreateCall(llvm_errfinish, {
+        irb->CreateCall(llvm_errcode, {ecode}),
+        irb->CreateCall(llvm_errmsg, {errmsg_fmt, args...}) });
+    irb->CreateBr(rest_ereport_block);
+    // }}}
+
+    // if (elevel >= ERROR) abort() {{{
+    irb->SetInsertPoint(rest_ereport_block);
+    irb->CreateCondBr(irb->CreateICmpSGE(elevel, GetConstant(ERROR)),
+                      abort_block /* true */,
+                      end_ereport_block /* false */);
+
+    irb->SetInsertPoint(abort_block);
+    irb->CreateCall(GetOrRegisterExternalFunction(abort, "abort"));
+
+    irb->CreateBr(end_ereport_block);
+    // }}}
+
+    // Set up for adding instructions past this point
+    irb->SetInsertPoint(end_ereport_block);
   }
 
   /**
@@ -139,7 +294,6 @@ class GpCodegenUtils : public CodegenUtils {
     // Get dest type as integer type with same size
     llvm::Type* llvm_dest_as_int_type = llvm::IntegerType::get(*context(),
                                                              dest_size);
-
     llvm::Value* llvm_casted_value = value;
 
     if (dest_size < src_size) {
@@ -153,6 +307,22 @@ class GpCodegenUtils : public CodegenUtils {
 
     return llvm_casted_value;
   }
+
+  /**
+   * @brief Create instructions to call MemoryContextAllocImpl in the
+   *        CurrentMemoryContext. Use the macro EXPAND_CREATE_PALLOC to get the
+   *        line number, function name and file name.
+   *
+   * @param size  Size to allocate in the CurrentMemoryContext
+   * @param file  File name
+   * @param func  Function name
+   * @param line  Line number
+   * @return LLVM::Value pointer to the allocated memory
+   */
+  llvm::Value* CreatePalloc(Size size,
+                            const char* file,
+                            const char *func,
+                            int line);
 
   /**
    * @brief Create a Cast instruction to convert given llvm::Value of any type

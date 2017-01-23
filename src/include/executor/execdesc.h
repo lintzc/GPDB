@@ -171,11 +171,15 @@ typedef struct QueryDispatchDesc
 	List	   *transientTypeRecords;
 
 	/*
-	 * For a SELECT INTO statement, this stores the OIDs to use for the
-	 * new table and related auxiliary tables and rowtypes.
+	 * For a SELECT INTO statement, this stores the tablespace to use for the
+	 * new table and related auxiliary tables.
 	 */
-	TableOidInfo *intoOidInfo;
 	char		*intoTableSpaceName;
+
+	/*
+	 * Oids to use, for new objects created in a CREATE command.
+	 */
+	List	   *oidAssignments;
 
 	/*
 	 * This allows the slice table to accompany the plan as it moves
@@ -190,6 +194,28 @@ typedef struct QueryDispatchDesc
 
 	List	   *cursorPositions;
 } QueryDispatchDesc;
+
+/*
+ * When a CREATE command is dispatched to segments, the OIDs used for the
+ * new objects are sent in a list of OidAssignments.
+ */
+typedef struct
+{
+	NodeTag		type;
+
+	/*
+	 * Key data. Depending on the catalog table, different fields are used.
+	 * See CreateKeyFromCatalogTuple().
+	 */
+	Oid			catalog;		/* OID of the catalog table, e.g. pg_class */
+	Oid			namespaceOid;	/* namespace OID for most objects */
+	char	   *objname;		/* object name (e.g. relation name) */
+	Oid			keyOid1;		/* generic OID field, meaning depends on object type */
+	Oid			keyOid2;		/* 2nd generic OID field, meaning depends on object type */
+
+	Oid			oid;			/* OID to assign */
+
+} OidAssignment;
 
 /* ----------------
  *		query descriptor:
@@ -214,29 +240,26 @@ typedef struct QueryDesc
 	DestReceiver *dest;			/* the destination for tuple output */
 	ParamListInfo params;		/* param values being passed in */
 	bool		doInstrument;	/* TRUE requests runtime instrumentation */
-	
+
 	/* These fields are set by ExecutorStart */
 	TupleDesc	tupDesc;		/* descriptor for result tuples */
 	struct EState      *estate;			/* executor's query-wide state */
 	struct PlanState   *planstate;		/* tree of per-plan-node state */
-	
+
 	/* This field is set by ExecutorEnd after collecting cdbdisp results */
 	uint64		es_processed;	/* # of tuples processed */
 	Oid			es_lastoid;		/* oid of row inserted */
 	bool		extended_query;   /* simple or extended query protocol? */
 	char		*portal_name;	/* NULL for unnamed portal */
 
-	/* The overall memory consumption account (i.e., outside of an operator) */
-	MemoryAccount *memoryAccount;
-
 	QueryDispatchDesc *ddesc;
 
 	/* CDB: EXPLAIN ANALYZE statistics */
 	struct CdbExplain_ShowStatCtx  *showstatctx;
-	
+
 	/* Gpmon */
 	gpmon_packet_t *gpmon_pkt;
-	
+
 	/* This is always set NULL by the core system, but plugins can change it */
 	struct Instrumentation *totaltime;	/* total time spent in ExecutorRun */
 

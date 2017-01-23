@@ -1636,12 +1636,16 @@ pgstat_count_heap_delete(Relation rel)
 		/* t_tuples_deleted is nontransactional, so just advance it */
 		pgstat_info->t_counts.t_tuples_deleted++;
 
-		/* We have to log the transactional effect at the proper level */
-		if (pgstat_info->trans == NULL ||
-			pgstat_info->trans->nest_level != nest_level)
-			add_tabstat_xact_level(pgstat_info, nest_level);
+		/* Only if in transaction record the transactional effect */
+		if (nest_level > 0)
+		{
+			/* We have to log the transactional effect at the proper level */
+			if (pgstat_info->trans == NULL ||
+				pgstat_info->trans->nest_level != nest_level)
+				add_tabstat_xact_level(pgstat_info, nest_level);
 
-		pgstat_info->trans->tuples_deleted++;
+			pgstat_info->trans->tuples_deleted++;
+		}
 	}
 }
 
@@ -2053,7 +2057,6 @@ pgstat_fetch_stat_beentry(int beid)
 
 	return &localBackendStatusTable[beid - 1];
 }
-
 
 /* ----------
  * pgstat_fetch_stat_numbackends() -
@@ -3059,6 +3062,7 @@ pgstat_write_statsfile(bool permanent)
 	PgStat_StatDBEntry *dbentry;
 	PgStat_StatTabEntry *tabentry;
 	PgStat_StatFuncEntry *funcentry;
+	PgStat_StatQueueEntry *queueentry;
 	FILE	   *fpout;
 	int32		format_id;
 	const char *tmpfile = permanent ? PGSTAT_STAT_PERMANENT_TMPFILE : pgstat_stat_tmpname;
@@ -3131,6 +3135,16 @@ pgstat_write_statsfile(bool permanent)
 		 * Mark the end of this DB
 		 */
 		fputc('d', fpout);
+	}
+
+	/*
+	 * Walk through resource queue stats.
+	 */
+	hash_seq_init(&fstat, pgStatQueueHash);
+	while ((queueentry = (PgStat_StatQueueEntry *) hash_seq_search(&fstat)) != NULL)
+	{
+		fputc('Q', fpout);
+		fwrite(queueentry, sizeof(PgStat_StatQueueEntry), 1, fpout);
 	}
 
 	/*

@@ -1,13 +1,13 @@
 /*-------------------------------------------------------------------------
  *
- * persistentrecovery.h
+ * cdbpersistentrecovery.h
  *
  * Copyright (c) 2009-2010, Greenplum inc
  *
  *-------------------------------------------------------------------------
  */
-#ifndef PERSISTENTRECOVERY_H
-#define PERSISTENTRECOVERY_H
+#ifndef CDBPERSISTENTRECOVERY_H
+#define CDBPERSISTENTRECOVERY_H
 
 #include "access/xlogdefs.h"
 #include "access/xlog.h"
@@ -95,4 +95,4 @@ extern void
 PersistentRecovery_DeserializeRedoRelationFile(
 	int redoRelationFile);
 
-#endif   /* PERSISTENTRECOVERY_H */
+#endif   /* CDBPERSISTENTRECOVERY_H */

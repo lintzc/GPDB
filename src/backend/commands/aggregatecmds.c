@@ -25,6 +25,7 @@
 #include "access/heapam.h"
 #include "catalog/dependency.h"
 #include "catalog/indexing.h"
+#include "catalog/oid_dispatch.h"
 #include "catalog/pg_aggregate.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
@@ -49,7 +50,7 @@
  */
 void
 DefineAggregate(List *name, List *args, bool oldstyle, List *parameters, 
-				Oid newOid, bool ordered)
+				bool ordered)
 {
 	char	   *aggName;
 	Oid			aggNamespace;
@@ -65,7 +66,6 @@ DefineAggregate(List *name, List *args, bool oldstyle, List *parameters,
 	int			numArgs;
 	Oid			transTypeId;
 	ListCell   *pl;
-	Oid			aggOid;
 
 	/* Convert list of names to a name and namespace */
 	aggNamespace = QualifiedNameGetCreationNamespace(name, &aggName);
@@ -186,21 +186,20 @@ DefineAggregate(List *name, List *args, bool oldstyle, List *parameters,
 	/*
 	 * look up the aggregate's transtype.
 	 *
-	 * transtype can't be a pseudo-type, (except during upgrade mode)
-	 * since we need to be able to store values of the transtype.
-	 * However, we can allow polymorphic transtype in some cases
-	 * (AggregateCreate will check). Also, we allow "internal"
+	 * transtype can't be a pseudo-type, since we need to be able to store
+	 * values of the transtype.  However, we can allow polymorphic transtype
+	 * in some cases (AggregateCreate will check).  Also, we allow "internal"
 	 * for functions that want to pass pointers to private data structures;
-	 * but allow that only to superusers, since you could crash the system
-	 * (or worse) by connecting up incompatible internal-using functions
-	 * in an aggregate.
+	 * but allow that only to superusers, since you could crash the system (or
+	 * worse) by connecting up incompatible internal-using functions in an
+	 * aggregate.
 	 */
 	transTypeId = typenameTypeId(NULL, transType, NULL);
 	if (get_typtype(transTypeId) == TYPTYPE_PSEUDO &&
 		!IsPolymorphicType(transTypeId))
 	{
 		if (transTypeId == INTERNALOID && superuser())
-			/* okay */ ;
+			 /* okay */ ;
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_FUNCTION_DEFINITION),
@@ -211,19 +210,18 @@ DefineAggregate(List *name, List *args, bool oldstyle, List *parameters,
 	/*
 	 * Most of the argument-checking is done inside of AggregateCreate
 	 */
-	aggOid = AggregateCreateWithOid(aggName,		/* aggregate name */
-									aggNamespace,	/* namespace */
-									aggArgTypes,	/* input data type(s) */
-									numArgs,
-									transfuncName,	/* step function name */
-									prelimfuncName,	/* prelim function name */
-									finalfuncName,	/* final function name */
-									sortoperatorName, /* sort operator name */
-									transTypeId,	/* transition data type */
-									initval,		/* initial condition */
-									ordered,		/* ordered aggregates */
-									newOid);
-					
+	AggregateCreate(aggName,	/* aggregate name */
+					aggNamespace,		/* namespace */
+					aggArgTypes,	/* input data type(s) */
+					numArgs,
+					transfuncName,		/* step function name */
+					prelimfuncName,		/* prelim function name */
+					finalfuncName,		/* final function name */
+					sortoperatorName,	/* sort operator name */
+					transTypeId,	/* transition data type */
+					initval,		/* initial condition */
+					ordered);		/* ordered aggregates */
+
 	if (Gp_role == GP_ROLE_DISPATCH)
 	{
 		DefineStmt * stmt = makeNode(DefineStmt);
@@ -232,13 +230,12 @@ DefineAggregate(List *name, List *args, bool oldstyle, List *parameters,
 		stmt->defnames = name;
 		stmt->args = args;
 		stmt->definition = parameters;
-		stmt->newOid = aggOid;
-		stmt->arrayOid = stmt->commutatorOid = stmt->negatorOid = InvalidOid;
 		stmt->ordered = ordered;
 		CdbDispatchUtilityStatement((Node *) stmt,
 									DF_CANCEL_ON_ERROR|
 									DF_WITH_SNAPSHOT|
 									DF_NEED_TWO_PHASE,
+									GetAssignedOidsForDispatch(),
 									NULL);
 	}
 }
@@ -303,6 +300,7 @@ RemoveAggregate(RemoveFuncStmt *stmt)
 									DF_CANCEL_ON_ERROR|
 									DF_WITH_SNAPSHOT|
 									DF_NEED_TWO_PHASE,
+									NIL,
 									NULL);
 	}
 }
@@ -338,7 +336,6 @@ RenameAggregate(List *name, List *args, const char *newname)
 							 PointerGetDatum(&procForm->proargtypes),
 							 ObjectIdGetDatum(namespaceOid),
 							 0))
-	{
 		ereport(ERROR,
 				(errcode(ERRCODE_DUPLICATE_FUNCTION),
 				 errmsg("function %s already exists in schema \"%s\"",
@@ -346,7 +343,6 @@ RenameAggregate(List *name, List *args, const char *newname)
 												  procForm->pronargs,
 											   procForm->proargtypes.values),
 						get_namespace_name(namespaceOid))));
-	}
 
 	/* must be owner */
 	if (!pg_proc_ownercheck(procOid, GetUserId()))

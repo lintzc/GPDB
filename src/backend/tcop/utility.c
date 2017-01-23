@@ -34,6 +34,7 @@
 #include "commands/defrem.h"
 #include "commands/discard.h"
 #include "commands/explain.h"
+#include "commands/extension.h"
 #include "commands/extprotocolcmds.h"
 #include "commands/filespace.h"
 #include "commands/lockcmds.h"
@@ -448,6 +449,9 @@ check_xact_readonly(Node *parsetree)
 		case T_CreateQueueStmt:
 		case T_CreateRoleStmt:
 		case T_IndexStmt:
+		case T_CreateExtensionStmt:
+		case T_AlterExtensionStmt:
+		case T_AlterExtensionContentsStmt:
 		case T_CreatePLangStmt:
 		case T_CreateOpClassStmt:
 		case T_CreateOpFamilyStmt:
@@ -605,7 +609,6 @@ ProcessDropStatement(DropStmt *stmt)
 				RemoveExtProtocol(names, stmt->behavior, stmt->missing_ok);
 				break;
 
-
 			case OBJECT_TSPARSER:
 				/*
 				 * RemoveTSParser does its own permission checks
@@ -632,6 +635,13 @@ ProcessDropStatement(DropStmt *stmt)
 				 * RemoveTSConfiguration does its own permission checks
 				 */
 				RemoveTSConfiguration(names, stmt->behavior, stmt->missing_ok);
+				break;
+
+			case OBJECT_EXTENSION:
+				/*
+				 * RemoveExtension does its own permissions checks
+				 */
+				RemoveExtension(names, stmt->behavior, stmt->missing_ok);
 				break;
 
 			default:
@@ -942,7 +952,7 @@ ProcessUtility(Node *parsetree,
 							{
 								case RELKIND_VIEW:
 								case RELKIND_COMPOSITE_TYPE:
-									Assert(relStorage = RELSTORAGE_VIRTUAL);
+									Assert(relStorage == RELSTORAGE_VIRTUAL);
 									break;
 								default:
 									Assert(relStorage == RELSTORAGE_HEAP ||
@@ -953,9 +963,12 @@ ProcessUtility(Node *parsetree,
 							}
 						}
 
-						/* Create the table itself */
+						/*
+						 * Create the table itself. Don't dispatch it yet, as we haven't
+						 * created the toast and other auxiliary tables yet.
+						 */
 						relOid = DefineRelation((CreateStmt *) stmt,
-												relKind, relStorage);
+												relKind, relStorage, false);
 
 						/*
 						 * Let AlterTableCreateToastTable decide if this one
@@ -965,39 +978,28 @@ ProcessUtility(Node *parsetree,
 
 						DefinePartitionedRelation((CreateStmt *) parsetree, relOid);
 
-						elog(DEBUG2,"CreateStmt: rel Oid %d toast Oid %d AoSeg Oid %d"
-							 "AoBlkdir Oid %d AoVisimap Oid %d",
-							 relOid,
-							 ((CreateStmt *) parsetree)->oidInfo.toastOid,
-							 ((CreateStmt *) parsetree)->oidInfo.aosegOid,
-							 ((CreateStmt *) parsetree)->oidInfo.aoblkdirOid,
-							 ((CreateStmt *) parsetree)->oidInfo.aovisimapOid);
-
 						if (relKind != RELKIND_COMPOSITE_TYPE)
 						{
-							AlterTableCreateToastTableWithOid(relOid,
-															  cstmt->oidInfo.toastOid,
-															  cstmt->oidInfo.toastIndexOid,
-															  &(cstmt->oidInfo.toastComptypeOid),
-															  cstmt->is_part_child);
-							AlterTableCreateAoSegTableWithOid(relOid,
-															  cstmt->oidInfo.aosegOid,
-															  &(cstmt->oidInfo.aosegComptypeOid),
-															  cstmt->is_part_child);
+							AlterTableCreateToastTable(relOid,
+													   cstmt->is_part_child);
+							AlterTableCreateAoSegTable(relOid,
+													   cstmt->is_part_child);
 
 							if (cstmt->buildAoBlkdir)
-								AlterTableCreateAoBlkdirTableWithOid(relOid,
-																	 cstmt->oidInfo.aoblkdirOid,
-																	 cstmt->oidInfo.aoblkdirIndexOid,
-																	 &(cstmt->oidInfo.aoblkdirComptypeOid),
-																	 cstmt->is_part_child);
+								AlterTableCreateAoBlkdirTable(relOid, cstmt->is_part_child);
 
-							AlterTableCreateAoVisimapTableWithOid(relOid,
-																  cstmt->oidInfo.aovisimapOid,
-																  cstmt->oidInfo.aovisimapIndexOid,
-																  &(cstmt->oidInfo.aovisimapComptypeOid),
-																  cstmt->is_part_child);
+							AlterTableCreateAoVisimapTable(relOid,
+														   cstmt->is_part_child);
 						}
+
+						if (Gp_role == GP_ROLE_DISPATCH)
+							CdbDispatchUtilityStatement((Node *) stmt,
+														DF_CANCEL_ON_ERROR |
+														DF_NEED_TWO_PHASE |
+														DF_WITH_SNAPSHOT,
+														GetAssignedOidsForDispatch(),
+														NULL);
+
 						CommandCounterIncrement();
 						/*
 						 * Deferred statements should be evaluated *after* AO tables
@@ -1027,11 +1029,41 @@ ProcessUtility(Node *parsetree,
 
 		case T_CreateExternalStmt:
 			{
-				CreateExternalStmt *stmt = (CreateExternalStmt *) parsetree;
+				List *stmts;
+				ListCell   *l;
 
 				/* Run parse analysis ... */
-				stmt = transformCreateExternalStmt(stmt, queryString);
-				DefineExternalRelation(stmt);
+				/*
+				 * GPDB: Only do parse analysis in the Query Dispatcher. The Executor
+				 * nodes receive an already-transformed statement from the QD. We only
+				 * want to process the main CreateExternalStmt here, other such
+				 * statements that would be created from the main
+				 * CreateExternalStmt by parse analysis. The QD will dispatch
+				 * those other statements separately.
+				 */
+				if (Gp_role == GP_ROLE_EXECUTE)
+					stmts = list_make1(parsetree);
+				else
+					stmts = transformCreateExternalStmt((CreateExternalStmt *) parsetree, queryString);
+
+				/* ... and do it */
+				foreach(l, stmts)
+				{
+					Node	   *stmt = (Node *) lfirst(l);
+
+					if (IsA(stmt, CreateExternalStmt))
+						DefineExternalRelation((CreateExternalStmt *) stmt);
+					else
+					{
+						/* Recurse for anything else */
+						ProcessUtility(stmt,
+									   queryString,
+									   params,
+									   false,
+									   None_Receiver,
+									   NULL);
+					}
+				}
 			}
 			break;
 
@@ -1058,7 +1090,7 @@ ProcessUtility(Node *parsetree,
 
 				foreach(arg, objects)
 				{
-					List	   *names = (List *)lfirst(arg);
+					List	   *names = (List *) lfirst(arg);
 
 					stmt->objects = NIL;
 					stmt->objects = lappend(stmt->objects, list_copy(names));
@@ -1075,6 +1107,7 @@ ProcessUtility(Node *parsetree,
 														DF_CANCEL_ON_ERROR|
 														DF_WITH_SNAPSHOT|
 														DF_NEED_TWO_PHASE,
+														NIL, /* FIXME */
 														NULL);
 						}
 					}
@@ -1220,10 +1253,12 @@ ProcessUtility(Node *parsetree,
 
 				if (Gp_role == GP_ROLE_DISPATCH)
 				{
+					/* ADD CONSTRAINT will assign a new OID for the constraint */
 					CdbDispatchUtilityStatement((Node *) stmt,
 												DF_CANCEL_ON_ERROR|
 												DF_WITH_SNAPSHOT|
 												DF_NEED_TWO_PHASE,
+												GetAssignedOidsForDispatch(),
 												NULL);
 				}
 			}
@@ -1249,36 +1284,35 @@ ProcessUtility(Node *parsetree,
 					case OBJECT_AGGREGATE:
 						DefineAggregate(stmt->defnames, stmt->args,
 										stmt->oldstyle, stmt->definition,
-										stmt->newOid, stmt->ordered);
+										stmt->ordered);
 						break;
 					case OBJECT_OPERATOR:
 						Assert(stmt->args == NIL);
-						DefineOperator(stmt->defnames, stmt->definition,
-									   stmt->newOid, stmt->commutatorOid, stmt->negatorOid);
+						DefineOperator(stmt->defnames, stmt->definition);
 						break;
 					case OBJECT_TYPE:
 						Assert(stmt->args == NIL);
-						DefineType(stmt->defnames, stmt->definition, stmt->newOid, stmt->arrayOid);
+						DefineType(stmt->defnames, stmt->definition);
 						break;
 					case OBJECT_EXTPROTOCOL:
 						Assert(stmt->args == NIL);
-						DefineExtProtocol(stmt->defnames, stmt->definition, stmt->newOid, stmt->trusted);
+						DefineExtProtocol(stmt->defnames, stmt->definition, stmt->trusted);
 						break;						
 					case OBJECT_TSPARSER:
 						Assert(stmt->args == NIL);
-						DefineTSParser(stmt->defnames, stmt->definition, stmt->newOid);
+						DefineTSParser(stmt->defnames, stmt->definition);
 						break;
 					case OBJECT_TSDICTIONARY:
 						Assert(stmt->args == NIL);
-						DefineTSDictionary(stmt->defnames, stmt->definition, stmt->newOid);
+						DefineTSDictionary(stmt->defnames, stmt->definition);
 						break;
 					case OBJECT_TSTEMPLATE:
 						Assert(stmt->args == NIL);
-						DefineTSTemplate(stmt->defnames, stmt->definition, stmt->newOid);
+						DefineTSTemplate(stmt->defnames, stmt->definition);
 						break;
 					case OBJECT_TSCONFIGURATION:
 						Assert(stmt->args == NIL);
-						DefineTSConfiguration(stmt->defnames, stmt->definition, stmt->newOid);
+						DefineTSConfiguration(stmt->defnames, stmt->definition);
 						break;
 					default:
 						elog(ERROR, "unrecognized define stmt type: %d",
@@ -1292,7 +1326,7 @@ ProcessUtility(Node *parsetree,
 			{
 				CompositeTypeStmt *stmt = (CompositeTypeStmt *) parsetree;
 
-				DefineCompositeType(stmt->typevar, stmt->coldeflist, stmt->relOid, stmt->comptypeOid);
+				DefineCompositeType(stmt->typevar, stmt->coldeflist);
 			}
 			break;
 
@@ -1347,11 +1381,22 @@ ProcessUtility(Node *parsetree,
 							false,		/* skip_build */
 							stmt->is_split_part,		/* quiet */
 							stmt->concurrent,	/* concurrent */
-							false, /* expanded from partitioning? */
 							stmt);
 			}
 			break;
 		}
+
+		case T_CreateExtensionStmt:
+			CreateExtension((CreateExtensionStmt *) parsetree);
+			break;
+
+		case T_AlterExtensionStmt:
+			ExecAlterExtensionStmt((AlterExtensionStmt *) parsetree);
+			break;
+
+		case T_AlterExtensionContentsStmt:
+			ExecAlterExtensionContentsStmt((AlterExtensionContentsStmt *) parsetree);
+			break;
 
 		case T_RuleStmt:		/* CREATE RULE */
 			DefineRule((RuleStmt *) parsetree, queryString);
@@ -1361,6 +1406,7 @@ ProcessUtility(Node *parsetree,
 											DF_CANCEL_ON_ERROR|
 											DF_WITH_SNAPSHOT|
 											DF_NEED_TWO_PHASE,
+											GetAssignedOidsForDispatch(),
 											NULL);
 			}
 			break;
@@ -1513,14 +1559,6 @@ ProcessUtility(Node *parsetree,
 			ExplainQuery((ExplainStmt *) parsetree, queryString, params, dest);
 			break;
 
-		case T_VariableShowStmt:
-			{
-				VariableShowStmt *n = (VariableShowStmt *) parsetree;
-
-				GetPGVariable(n->name, dest);
-			}
-			break;
-
 		case T_VariableSetStmt:
 			{
 				VariableSetStmt *n = (VariableSetStmt *) parsetree;
@@ -1594,6 +1632,14 @@ ProcessUtility(Node *parsetree,
 			}
 			break;
 
+		case T_VariableShowStmt:
+			{
+				VariableShowStmt *n = (VariableShowStmt *) parsetree;
+
+				GetPGVariable(n->name, dest);
+			}
+			break;
+
 		case T_DiscardStmt:
 			/* should we allow DISCARD PLANS? */
 			CheckRestrictedOperation("DISCARD");
@@ -1610,6 +1656,7 @@ ProcessUtility(Node *parsetree,
 												DF_CANCEL_ON_ERROR|
 												DF_WITH_SNAPSHOT|
 												DF_NEED_TWO_PHASE,
+												GetAssignedOidsForDispatch(),
 												NULL);
 				}
 			}
@@ -1645,6 +1692,7 @@ ProcessUtility(Node *parsetree,
 												DF_CANCEL_ON_ERROR|
 												DF_WITH_SNAPSHOT|
 												DF_NEED_TWO_PHASE,
+												NIL, /* FIXME */
 												NULL);
 				}
 			}
@@ -1947,7 +1995,7 @@ CreateCommandTag(Node *parsetree)
 
 	switch (nodeTag(parsetree))
 	{
-		/* raw plannable queries */
+			/* raw plannable queries */
 		case T_InsertStmt:
 			tag = "INSERT";
 			break;
@@ -1964,7 +2012,7 @@ CreateCommandTag(Node *parsetree)
 			tag = "SELECT";
 			break;
 
-		/* utility statements --- same whether raw or cooked */
+			/* utility statements --- same whether raw or cooked */
 		case T_TransactionStmt:
 			{
 				TransactionStmt *stmt = (TransactionStmt *) parsetree;
@@ -2113,6 +2161,9 @@ CreateCommandTag(Node *parsetree)
 				case OBJECT_TSCONFIGURATION:
 					tag = "DROP TEXT SEARCH CONFIGURATION";
 					break;
+				case OBJECT_EXTENSION:
+					tag = "DROP EXTENSION";
+					break;
 				default:
 					tag = "???";
 			}
@@ -2212,6 +2263,9 @@ CreateCommandTag(Node *parsetree)
 				case OBJECT_DOMAIN:
 					tag = "ALTER DOMAIN";
 					break;
+				case OBJECT_EXTENSION:
+					tag = "ALTER EXTENSION";
+					break;
 				case OBJECT_FUNCTION:
 					tag = "ALTER FUNCTION";
 					break;
@@ -2256,6 +2310,9 @@ CreateCommandTag(Node *parsetree)
 					break;
 				case OBJECT_DOMAIN:
 					tag = "ALTER DOMAIN";
+					break;
+				case OBJECT_EXTENSION:
+					tag = "ALTER EXTENSION";
 					break;
 				case OBJECT_FUNCTION:
 					tag = "ALTER FUNCTION";
@@ -2392,6 +2449,18 @@ CreateCommandTag(Node *parsetree)
 
 		case T_IndexStmt:
 			tag = "CREATE INDEX";
+			break;
+
+		case T_CreateExtensionStmt:
+			tag = "CREATE EXTENSION";
+			break;
+
+		case T_AlterExtensionStmt:
+			tag = "ALTER EXTENSION";
+			break;
+
+		case T_AlterExtensionContentsStmt:
+			tag = "ALTER EXTENSION";
 			break;
 
 		case T_RuleStmt:
@@ -2649,7 +2718,56 @@ CreateCommandTag(Node *parsetree)
 					tag = "DEALLOCATE";
 			}
 			break;
-		
+
+			/* already-planned queries */
+		case T_PlannedStmt:
+			{
+				PlannedStmt *stmt = (PlannedStmt *) parsetree;
+
+				switch (stmt->commandType)
+				{
+					case CMD_SELECT:
+
+						/*
+						 * We take a little extra care here so that the result
+						 * will be useful for complaints about read-only
+						 * statements
+						 */
+						if (stmt->utilityStmt != NULL)
+						{
+							Assert(IsA(stmt->utilityStmt, DeclareCursorStmt));
+							tag = "DECLARE CURSOR";
+						}
+						else if (stmt->intoClause != NULL)
+							tag = "SELECT INTO";
+						else if (stmt->rowMarks != NIL)
+						{
+							if (((RowMarkClause *) linitial(stmt->rowMarks))->forUpdate)
+								tag = "SELECT FOR UPDATE";
+							else
+								tag = "SELECT FOR SHARE";
+						}
+						else
+							tag = "SELECT";
+						break;
+					case CMD_UPDATE:
+						tag = "UPDATE";
+						break;
+					case CMD_INSERT:
+						tag = "INSERT";
+						break;
+					case CMD_DELETE:
+						tag = "DELETE";
+						break;
+					default:
+						elog(WARNING, "unrecognized commandType: %d",
+							 (int) stmt->commandType);
+						tag = "???";
+						break;
+				}
+			}
+			break;
+
 		case T_Query: /* used to be function CreateQueryTag */
 			{
 				Query *query = (Query*)parsetree;
@@ -2657,10 +2775,11 @@ CreateCommandTag(Node *parsetree)
 				switch (query->commandType)
 				{
 					case CMD_SELECT:
-						
+
 						/*
-						 * We take a little extra care here so that the result will be
-						 * useful for complaints about read-only statements
+						 * We take a little extra care here so that the result
+						 * will be useful for complaints about read-only
+						 * statements
 						 */
 						if (query->intoClause != NULL)
 							tag = "SELECT INTO";
@@ -2700,9 +2819,9 @@ CreateCommandTag(Node *parsetree)
 			break;
 
 		default:
-			Assert(false);
 			elog(WARNING, "unrecognized node type: %d",
 				 (int) nodeTag(parsetree));
+			Assert(false);
 			tag = "???";
 			break;
 	}
@@ -2726,7 +2845,7 @@ GetCommandLogLevel(Node *parsetree)
 
 	switch (nodeTag(parsetree))
 	{
-		/* raw plannable queries */
+			/* raw plannable queries */
 		case T_InsertStmt:
 		case T_DeleteStmt:
 		case T_UpdateStmt:
@@ -2740,7 +2859,7 @@ GetCommandLogLevel(Node *parsetree)
 				lev = LOGSTMT_ALL;
 			break;
 
-		/* utility statements --- same whether raw or cooked */
+			/* utility statements --- same whether raw or cooked */
 		case T_TransactionStmt:
 			lev = LOGSTMT_ALL;
 			break;
@@ -2853,6 +2972,12 @@ GetCommandLogLevel(Node *parsetree)
 			break;
 
 		case T_IndexStmt:
+			lev = LOGSTMT_DDL;
+			break;
+
+		case T_CreateExtensionStmt:
+		case T_AlterExtensionStmt:
+		case T_AlterExtensionContentsStmt:
 			lev = LOGSTMT_DDL;
 			break;
 

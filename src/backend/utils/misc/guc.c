@@ -61,6 +61,7 @@
 #include "tcop/tcopprot.h"
 #include "tsearch/ts_cache.h"
 #include "utils/builtins.h"
+#include "utils/bytea.h"
 #include "utils/guc_tables.h"
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
@@ -186,6 +187,10 @@ static bool assign_autovacuum_max_workers(int newval, bool doit, GucSource sourc
 static bool assign_maxconnections(int newval, bool doit, GucSource source);
 
 static const char *assign_application_name(const char *newval, bool doit, GucSource source);
+static const char *assign_bytea(const char *newval, bool doit, GucSource source);
+
+/* hack until enum configs */
+static char *bytea_output_temp="escape";
 
 static int	defunct_int = 0;
 static bool	defunct_bool = false;
@@ -601,13 +606,13 @@ static struct config_bool ConfigureNamesBool[] =
 			"sure that updates are physically written to disk. This insures "
 						 "that a database cluster will recover to a consistent state after "
 						 "an operating system or hardware crash."),
-		  GUC_NOT_IN_SAMPLE | GUC_NO_SHOW_ALL | GUC_DISALLOW_USER_SET
+		  GUC_NOT_IN_SAMPLE | GUC_NO_SHOW_ALL
 		},
 		&enableFsync,
 		true, NULL, NULL
 	},
 	{
-		{"synchronous_commit", PGC_USERSET, WAL_SETTINGS,
+		{"synchronous_commit", PGC_USERSET, DEFUNCT_OPTIONS,
 			gettext_noop("Sets immediate fsync at commit."),
 			NULL
 		},
@@ -2644,7 +2649,15 @@ static struct config_string ConfigureNamesString[] =
 		&external_pid_file,
 		NULL, assign_canonical_path, NULL
 	},
-
+	/* placed here as a temporary hack until we get guc enums */
+		{
+			{"bytea_output", PGC_USERSET, CLIENT_CONN_STATEMENT,
+				gettext_noop("Sets the output format for bytea."),
+				gettext_noop("Valid values are HEX and ESCAPE.")
+			},
+			&bytea_output_temp,
+			"escape", assign_bytea, NULL, NULL
+		},
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, NULL, NULL, NULL
@@ -3551,6 +3564,7 @@ SelectConfigFiles(const char *userDoption, const char *progname)
 	{
 		write_stderr("%s cannot access the server configuration file \"%s\": %s\n",
 					 progname, ConfigFileName, strerror(errno));
+		free(configdir);
 		return false;
 	}
 
@@ -4478,7 +4492,7 @@ set_config_option(const char *name, const char *value,
 	int			elevel;
 	bool		makeDefault;
 
-	if (context == PGC_SIGHUP || context == PGC_POSTMASTER || source == PGC_S_DEFAULT)
+	if (context == PGC_SIGHUP || source == PGC_S_DEFAULT)
 	{
 		/*
 		 * To avoid cluttering the log, only the postmaster bleats loudly
@@ -5593,7 +5607,7 @@ SetPGVariableOptDispatch(const char *name, List *args, bool is_local, bool gp_di
 
 		if (gp_dispatch)
 		{
-			CdbSetGucOnAllGangs( buffer.data, false, /*no txn*/ false );
+			CdbDispatchSetCommand( buffer.data, false, /*no txn*/ false );
 		}
 	}
 }
@@ -5649,7 +5663,7 @@ set_config_by_name(PG_FUNCTION_ARGS)
 			if (is_local)
 					appendStringInfo(&buffer, "LOCAL ");
 			appendStringInfo(&buffer, "%s TO '%s'", name, value);
-			CdbSetGucOnAllGangs(buffer.data,
+			CdbDispatchSetCommand(buffer.data,
 								   false /* cancelOnError */,
 								   false /* no two phase commit */);
     }
@@ -7607,6 +7621,31 @@ assign_transaction_read_only(bool newval, bool doit, GucSource source)
 			return false;
 	}
 	return true;
+}
+
+/*
+ * until we get enum config this is a hack
+ * to set an int value through a string
+ *
+ */
+
+static const char *
+assign_bytea( const char * newval, bool doit, GucSource source )
+{
+	int bo;
+
+	if (pg_strcasecmp(newval, "hex") == 0)
+		bo = BYTEA_OUTPUT_HEX;
+	else if (pg_strcasecmp(newval, "escape") == 0)
+		bo = BYTEA_OUTPUT_ESCAPE;
+	else
+		return NULL;
+
+	if (doit)
+	{
+		bytea_output = bo;
+	}
+	return newval;
 }
 
 static const char *

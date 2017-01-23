@@ -35,6 +35,7 @@
 #include "tcop/utility.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
+#include "utils/bytea.h"
 #include "utils/fmgroids.h"
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
@@ -240,6 +241,14 @@ CreateTrigger(CreateTrigStmt *stmt, Oid constraintOid)
 	 */
 	tgrel = heap_open(TriggerRelationId, RowExclusiveLock);
 
+	/*
+	 * For RI constraint triggers, the trigger's name is derived from the
+	 * trigger OID. That creates a chicken-and-egg problem with the usual
+	 * GPDB OID dispatching mechanism. In a QE, we cannot look up the
+	 * trigger OID to use by trigger name, because the trigger name is
+	 * derived from the OID. To work around that, the trigger OID is
+	 * included directly in the CreateTrigStmt struct.
+	 */
 	if (OidIsValid(stmt->trigOid))
 		trigoid = stmt->trigOid;
 	else
@@ -899,6 +908,59 @@ RemoveTriggerById(Oid trigOid)
 
 	/* Keep lock on trigger's rel until end of xact */
 	heap_close(rel, NoLock);
+}
+
+/*
+ * get_trigger_oid - Look up a trigger by name to find its OID.
+ *
+ * If missing_ok is false, throw an error if trigger not found.  If
+ * true, just return InvalidOid.
+ */
+Oid
+get_trigger_oid(Oid relid, const char *trigname, bool missing_ok)
+{
+	Relation	tgrel;
+	ScanKeyData skey[2];
+	SysScanDesc tgscan;
+	HeapTuple	tup;
+	Oid			oid;
+
+	/*
+	 * Find the trigger, verify permissions, set up object address
+	 */
+	tgrel = heap_open(TriggerRelationId, AccessShareLock);
+
+	ScanKeyInit(&skey[0],
+				Anum_pg_trigger_tgrelid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(relid));
+	ScanKeyInit(&skey[1],
+				Anum_pg_trigger_tgname,
+				BTEqualStrategyNumber, F_NAMEEQ,
+				CStringGetDatum(trigname));
+
+	tgscan = systable_beginscan(tgrel, TriggerRelidNameIndexId, true,
+								SnapshotNow, 2, skey);
+
+	tup = systable_getnext(tgscan);
+
+	if (!HeapTupleIsValid(tup))
+	{
+		if (!missing_ok)
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("trigger \"%s\" for table \"%s\" does not exist",
+							trigname, get_rel_name(relid))));
+		oid = InvalidOid;
+	}
+	else
+	{
+		oid = HeapTupleGetOid(tup);
+	}
+
+	systable_endscan(tgscan);
+	heap_close(tgrel, AccessShareLock);
+	return oid;
 }
 
 /*
@@ -3623,6 +3685,7 @@ AfterTriggerSetState(ConstraintsSetStmt *stmt)
 									DF_CANCEL_ON_ERROR|
 									DF_WITH_SNAPSHOT|
 									DF_NEED_TWO_PHASE,
+									NIL, /* FIXME */
 									NULL);
 	}
 }

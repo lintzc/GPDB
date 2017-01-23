@@ -1348,6 +1348,7 @@ ChangeTracking_GetIncrementalChangeList(void)
 		/* must be in a transaction in order to use SPI */
 		StartTransactionCommand();
 		ActiveSnapshot = CopySnapshot(GetTransactionSnapshot());
+		SetSessionUserId(BOOTSTRAP_SUPERUSERID, true);
 
 		if (SPI_OK_CONNECT != SPI_connect())
 		{
@@ -1633,6 +1634,7 @@ ChangeTrackingResult* ChangeTracking_GetChanges(ChangeTrackingRequest *request)
 		/* must be in a transaction in order to use SPI */
 		StartTransactionCommand();
 		ActiveSnapshot = CopySnapshot(GetTransactionSnapshot());
+		SetSessionUserId(BOOTSTRAP_SUPERUSERID, true);
 
 		if (SPI_OK_CONNECT != SPI_connect())
 		{
@@ -1848,6 +1850,11 @@ File ChangeTracking_OpenFile(CTFType ftype)
 									 O_RDWR | O_CREAT | PG_BINARY, 
 									 S_IRUSR | S_IWUSR);
 
+			if (file == -1)
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						errmsg("could not open file \"%s\": %m", path)));
+
 			/* 
 			 * seek to beginning of file. The meta file only has a single
 			 * block. we will overwrite it each time with new meta data.
@@ -1867,6 +1874,11 @@ File ChangeTracking_OpenFile(CTFType ftype)
 									 O_RDWR | O_CREAT | PG_BINARY, 
 									 S_IRUSR | S_IWUSR);
 				
+			if (file == -1)
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						errmsg("could not open file \"%s\": %m", path)));
+
 			FileSeek(file, 0, SEEK_END); 
 			break;
 
@@ -3082,6 +3094,7 @@ int ChangeTracking_CompactLogFile(CTFType source, CTFType dest, XLogRecPtr*	upto
 		/* must be in a transaction in order to use SPI */
 		StartTransactionCommand();
 		ActiveSnapshot = CopySnapshot(GetTransactionSnapshot());
+		SetSessionUserId(BOOTSTRAP_SUPERUSERID, true);
 
 		if (SPI_OK_CONNECT != SPI_connect())
 		{

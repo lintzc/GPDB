@@ -6,13 +6,13 @@
  * Copyright (c) 2003-2010, Greenplum inc
  *
  * NOTES
- *	  See src/backend/utils/misc/guc.c for variable external specification.
+ *	  See src/backend/utils/misc/guc_gp.c for variable external specification.
  *
  *-------------------------------------------------------------------------
  */
 
-#ifndef GPVARS_H
-#define GPVARS_H
+#ifndef CDBVARS_H
+#define CDBVARS_H
 
 #include "access/xlogdefs.h"  /*XLogRecPtr*/
 #include "utils/guc.h"
@@ -200,14 +200,6 @@ extern int			pgstat_track_activity_query_size;
  * it is very handy to slow down the writer (opens important race-window).
  */
 extern bool           gp_enable_slow_writer_testmode;
-
-
-/*
- * MPP-8622:
- * In order to facilitate testing of reader-gang/writer-gang synchronization
- * it is very handy to slow down the cursor (opens important race-window).
- */
-extern bool           gp_enable_slow_cursor_testmode;
 
 /*
  * MPP-6926: Resource Queues on by default
@@ -1088,4 +1080,4 @@ extern char *gp_idf_deduplicate_str;
 /* default to RANDOM distribution for CREATE TABLE without DISTRIBUTED BY */
 extern bool gp_create_table_random_default_distribution;
 
-#endif   /* GPVARS_H */
+#endif   /* CDBVARS_H */

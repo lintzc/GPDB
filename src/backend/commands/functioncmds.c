@@ -36,6 +36,7 @@
 #include "access/heapam.h"
 #include "catalog/dependency.h"
 #include "catalog/indexing.h"
+#include "catalog/oid_dispatch.h"
 #include "catalog/pg_aggregate.h"
 #include "catalog/pg_cast.h"
 #include "catalog/pg_language.h"
@@ -80,7 +81,7 @@ static void CheckForModifySystemFunc(Oid funcOid, List *funcName);
  */
 static void
 compute_return_type(TypeName *returnType, Oid languageOid,
-					Oid *prorettype_p, bool *returnsSet_p, Oid shelltypeOid)
+					Oid *prorettype_p, bool *returnsSet_p)
 {
 	Oid			rettype;
 	Type		typtup;
@@ -153,7 +154,7 @@ compute_return_type(TypeName *returnType, Oid languageOid,
 		if (aclresult != ACLCHECK_OK)
 			aclcheck_error(aclresult, ACL_KIND_NAMESPACE,
 						   get_namespace_name(namespaceId));
-		rettype = TypeShellMake(typname, namespaceId, GetUserId(), shelltypeOid);
+		rettype = TypeShellMake(typname, namespaceId, GetUserId());
 		Assert(OidIsValid(rettype));
 	}
 
@@ -744,9 +745,6 @@ compute_attributes_sql_style(List *options,
  *	 * volatility tells the optimizer whether the function's result can
  *	   be assumed to be repeatable over multiple evaluations.
  *
- *   * oid (upgrade mode only) specifies that the function should be
- *     created with the user-specified oid.
- *
  *   * describeQualName is the qualified name of a describe callback function
  *     to handle dynamic type resolution.
  *------------
@@ -755,7 +753,6 @@ static void
 compute_attributes_with_style(List *parameters, 
 							  bool *isStrict_p, 
 							  char *volatility_p, 
-							  Oid* oid_p,
 							  List **describeQualName_p)
 {
 	ListCell   *pl;
@@ -1007,6 +1004,7 @@ CreateFunction(CreateFunctionStmt *stmt, const char *queryString)
 	List       *describeQualName = NIL;
 	Oid         describeFuncOid  = InvalidOid;
 	char		dataAccess;
+	Oid			funcOid;
 
 	/* Convert list of names to a name and namespace */
 	namespaceId = QualifiedNameGetCreationNamespace(stmt->funcname,
@@ -1100,13 +1098,12 @@ CreateFunction(CreateFunctionStmt *stmt, const char *queryString)
 	{
 		/* explicit RETURNS clause */
 		compute_return_type(stmt->returnType, languageOid,
-							&prorettype, &returnsSet, stmt->shelltypeOid);
+							&prorettype, &returnsSet);
 		if (OidIsValid(requiredResultType) && prorettype != requiredResultType)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_FUNCTION_DEFINITION),
 					 errmsg("function result type must be %s because of OUT parameters",
 							format_type_be(requiredResultType))));
-		stmt->shelltypeOid = prorettype;
 	}
 	else if (OidIsValid(requiredResultType))
 	{
@@ -1125,7 +1122,7 @@ CreateFunction(CreateFunctionStmt *stmt, const char *queryString)
 	}
 
 	compute_attributes_with_style(stmt->withClause, &isStrict, &volatility,
-								  &stmt->funcOid, &describeQualName);
+								  &describeQualName);
 
 	interpret_AS_clause(languageOid, languageName, funcname, as_clause,
 						&prosrc_str, &probin_str);
@@ -1170,7 +1167,7 @@ CreateFunction(CreateFunctionStmt *stmt, const char *queryString)
 	 * And now that we have all the parameters, and know we're permitted to do
 	 * so, go ahead and create the function.
 	 */
-	stmt->funcOid = ProcedureCreate(funcname,
+	funcOid = ProcedureCreate(funcname,
 					namespaceId,
 					stmt->replace,
 					returnsSet,
@@ -1193,8 +1190,7 @@ CreateFunction(CreateFunctionStmt *stmt, const char *queryString)
 					PointerGetDatum(proconfig),
 					procost,
 					prorows,
-					dataAccess,
-					stmt->funcOid);
+					dataAccess);
 
 	if (Gp_role == GP_ROLE_DISPATCH)
 	{
@@ -1202,6 +1198,7 @@ CreateFunction(CreateFunctionStmt *stmt, const char *queryString)
 									DF_CANCEL_ON_ERROR|
 									DF_WITH_SNAPSHOT|
 									DF_NEED_TWO_PHASE,
+									GetAssignedOidsForDispatch(),
 									NULL);
 	}
 }
@@ -1283,6 +1280,7 @@ RemoveFunction(RemoveFuncStmt *stmt)
 									DF_CANCEL_ON_ERROR|
 									DF_WITH_SNAPSHOT|
 									DF_NEED_TWO_PHASE,
+									NIL, /* FIXME */
 									NULL);
 	}
 }
@@ -1719,6 +1717,7 @@ AlterFunction(AlterFunctionStmt *stmt)
 									DF_CANCEL_ON_ERROR|
 									DF_WITH_SNAPSHOT|
 									DF_NEED_TWO_PHASE,
+									NIL, /* FIXME */
 									NULL);
 	}
 }
@@ -1994,9 +1993,6 @@ CreateCast(CreateCastStmt *stmt)
 
 	tuple = heap_form_tuple(RelationGetDescr(relation), values, nulls);
 
-	if (stmt->castOid != 0)
-		HeapTupleSetOid(tuple, stmt->castOid);
-
 	simple_heap_insert(relation, tuple);
 
 	CatalogUpdateIndexes(relation, tuple);
@@ -2027,6 +2023,9 @@ CreateCast(CreateCastStmt *stmt)
 		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 	}
 
+	/* dependency on extension */
+	recordDependencyOnCurrentExtension(&myself, false);
+
 	heap_freetuple(tuple);
 
 	heap_close(relation, RowExclusiveLock);
@@ -2037,6 +2036,7 @@ CreateCast(CreateCastStmt *stmt)
 									DF_CANCEL_ON_ERROR|
 									DF_WITH_SNAPSHOT|
 									DF_NEED_TWO_PHASE,
+									GetAssignedOidsForDispatch(),
 									NULL);
 	}
 	
@@ -2106,10 +2106,33 @@ DropCast(DropCastStmt *stmt)
 									DF_CANCEL_ON_ERROR|
 									DF_WITH_SNAPSHOT|
 									DF_NEED_TWO_PHASE,
+									NIL, /* FIXME */
 									NULL);
 	}
 }
 
+/*
+ * get_cast_oid - given two type OIDs, look up a cast OID
+ *
+ * If missing_ok is false, throw an error if the cast is not found.  If
+ * true, just return InvalidOid.
+ */
+Oid
+get_cast_oid(Oid sourcetypeid, Oid targettypeid, bool missing_ok)
+{
+	Oid			oid;
+
+	oid = GetSysCacheOid2(CASTSOURCETARGET,
+						  ObjectIdGetDatum(sourcetypeid),
+						  ObjectIdGetDatum(targettypeid));
+	if (!OidIsValid(oid) && !missing_ok)
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("cast from type %s to type %s does not exist",
+						format_type_be(sourcetypeid),
+						format_type_be(targettypeid))));
+	return oid;
+}
 
 void
 DropCastById(Oid castOid)
@@ -2146,14 +2169,8 @@ void
 AlterFunctionNamespace(List *name, List *argtypes, bool isagg,
 					   const char *newschema)
 {
-	Oid			procOid;
-	Oid			oldNspOid;
+	Oid 		procOid;
 	Oid			nspOid;
-	HeapTuple	tup;
-	Relation	procRel;
-	Form_pg_proc proc;
-
-	procRel = heap_open(ProcedureRelationId, RowExclusiveLock);
 
 	/* get function OID */
 	if (isagg)
@@ -2161,59 +2178,47 @@ AlterFunctionNamespace(List *name, List *argtypes, bool isagg,
 	else
 		procOid = LookupFuncNameTypeNames(name, argtypes, false);
 
-	/* check permissions on function */
-	if (!pg_proc_ownercheck(procOid, GetUserId()))
-		aclcheck_error(ACLCHECK_NOT_OWNER, ACL_KIND_PROC,
-					   NameListToString(name));
+	/* get schema OID and check its permission */
+	nspOid = LookupCreationNamespace(newschema);
 
-	tup = SearchSysCacheCopy(PROCOID,
-							 ObjectIdGetDatum(procOid),
-							 0, 0, 0);
+	AlterFunctionNamespace_oid(procOid, nspOid);
+}
+
+Oid
+AlterFunctionNamespace_oid(Oid procOid, Oid nspOid)
+{
+	Oid			oldNspOid;
+	HeapTuple	tup;
+	Relation	procRel;
+	Form_pg_proc proc;
+
+	procRel = heap_open(ProcedureRelationId, RowExclusiveLock);
+
+	tup = SearchSysCacheCopy1(PROCOID, ObjectIdGetDatum(procOid));
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "cache lookup failed for function %u", procOid);
 	proc = (Form_pg_proc) GETSTRUCT(tup);
 
+	/* check permissions on function */
+	if (!pg_proc_ownercheck(procOid, GetUserId()))
+		aclcheck_error(ACLCHECK_NOT_OWNER, ACL_KIND_PROC,
+					   NameStr(proc->proname));
+
 	oldNspOid = proc->pronamespace;
 
-	/* get schema OID and check its permissions */
-	nspOid = LookupCreationNamespace(newschema);
-
-	if (oldNspOid == nspOid)
-		ereport(ERROR,
-				(errcode(ERRCODE_DUPLICATE_FUNCTION),
-				 errmsg("function \"%s\" is already in schema \"%s\"",
-						NameListToString(name),
-						newschema)));
-
-	/* disallow renaming into or out of temp schemas */
-	if (isAnyTempNamespace(nspOid) || isAnyTempNamespace(oldNspOid))
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-			errmsg("cannot move objects into or out of temporary schemas")));
-
-	/* same for TOAST schema */
-	if (nspOid == PG_TOAST_NAMESPACE || oldNspOid == PG_TOAST_NAMESPACE)
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("cannot move objects into or out of TOAST schema")));
-
-	/* same for AO segment list schema */
-	if (nspOid == PG_AOSEGMENT_NAMESPACE || oldNspOid == PG_AOSEGMENT_NAMESPACE)
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("cannot move objects into or out of AO SEGMENT schema")));
+	/* common checks on switching namespaces */
+	CheckSetNamespace(oldNspOid, nspOid, ProcedureRelationId, procOid);
 
 	/* check for duplicate name (more friendly than unique-index failure) */
-	if (SearchSysCacheExists(PROCNAMEARGSNSP,
-							 CStringGetDatum(NameStr(proc->proname)),
-							 PointerGetDatum(&proc->proargtypes),
-							 ObjectIdGetDatum(nspOid),
-							 0))
+	if (SearchSysCacheExists3(PROCNAMEARGSNSP,
+							  CStringGetDatum(NameStr(proc->proname)),
+							  PointerGetDatum(&proc->proargtypes),
+							  ObjectIdGetDatum(nspOid)))
 		ereport(ERROR,
 				(errcode(ERRCODE_DUPLICATE_FUNCTION),
-				 errmsg("function \"%s\" already exists in schema \"%s\"",
-						NameStr(proc->proname),
-						newschema)));
+						errmsg("function \"%s\" already exists in schema \"%s\"",
+							   NameStr(proc->proname),
+							   get_namespace_name(nspOid))));
 
 	/* OK, modify the pg_proc row */
 
@@ -2227,13 +2232,14 @@ AlterFunctionNamespace(List *name, List *argtypes, bool isagg,
 	if (changeDependencyFor(ProcedureRelationId, procOid,
 							NamespaceRelationId, oldNspOid, nspOid) != 1)
 		elog(ERROR, "failed to change schema dependency for function \"%s\"",
-			 NameListToString(name));
+			 NameStr(proc->proname));
 
 	heap_freetuple(tup);
 
 	heap_close(procRel, RowExclusiveLock);
-}
 
+	return oldNspOid;
+}
 
 /*
  * ExecuteDoStmt

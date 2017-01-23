@@ -43,9 +43,11 @@
 #include "access/distributedlog.h"
 #include "access/printtup.h"
 #include "access/xact.h"
+#include "catalog/oid_dispatch.h"
 #include "catalog/pg_type.h"
 #include "commands/async.h"
 #include "commands/prepare.h"
+#include "commands/extension.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
 #include "libpq/pqsignal.h"
@@ -992,8 +994,7 @@ pg_plan_queries(List *querytrees, int cursorOptions, ParamListInfo boundParams,
 /*
  * exec_mpp_query
  *
- * Called in a qExec process to read and execute a query plan sent by
- * cdbdisp_dispatchPlan().
+ * Called in a qExec process to read and execute a query plan sent by CdbDispatchPlan().
  *
  * query_string -- optional query text (C string).
  * serializedQuerytree[len]  -- Query node or (NULL,0) if plan provided.
@@ -1121,6 +1122,9 @@ exec_mpp_query(const char *query_string,
 			/* Set global sliceid variable for elog. */
 			currentSliceId = sliceTable->localSlice;
 		}
+
+		if (ddesc->oidAssignments)
+			AddPreassignedOids(ddesc->oidAssignments);
     }
 
 	/*
@@ -1290,8 +1294,10 @@ exec_mpp_query(const char *query_string,
 		if (Debug_dtm_action == DEBUG_DTM_ACTION_FAIL_BEGIN_COMMAND &&
 			CheckDebugDtmActionSqlCommandTag(commandTag))
 		{
-			elog(ERROR,"Raise ERROR for debug_dtm_action = %d, commandTag = %s",
-				 Debug_dtm_action, commandTag);
+			ereport(ERROR,
+					(errcode(ERRCODE_FAULT_INJECT),
+					 errmsg("Raise ERROR for debug_dtm_action = %d, commandTag = %s",
+							Debug_dtm_action, commandTag)));
 		}
 		
 		/*
@@ -1395,8 +1401,10 @@ exec_mpp_query(const char *query_string,
 		if (Debug_dtm_action == DEBUG_DTM_ACTION_FAIL_END_COMMAND &&
 			CheckDebugDtmActionSqlCommandTag(commandTag))
 		{
-			elog(ERROR,"Raise ERROR for debug_dtm_action = %d, commandTag = %s",
-				 Debug_dtm_action, commandTag);
+			ereport(ERROR,
+					(errcode(ERRCODE_FAULT_INJECT),
+					 errmsg("Raise ERROR for debug_dtm_action = %d, commandTag = %s",
+							Debug_dtm_action, commandTag)));
 		}
 		
 		/*
@@ -1485,8 +1493,10 @@ exec_mpp_dtx_protocol_command(DtxProtocolCommand dtxProtocolCommand,
 	if (Debug_dtm_action == DEBUG_DTM_ACTION_FAIL_BEGIN_COMMAND &&
 		CheckDebugDtmActionProtocol(dtxProtocolCommand, contextInfo))
 	{
-		elog(ERROR,"Raise ERROR for debug_dtm_action = %d, debug_dtm_action_protocol = %s",
-			 Debug_dtm_action, DtxProtocolCommandToString(dtxProtocolCommand));
+		ereport(ERROR,
+				(errcode(ERRCODE_FAULT_INJECT),
+				 errmsg("Raise ERROR for debug_dtm_action = %d, debug_dtm_action_protocol = %s",
+						Debug_dtm_action, DtxProtocolCommandToString(dtxProtocolCommand))));
 	}
 	if (Debug_dtm_action == DEBUG_DTM_ACTION_PANIC_BEGIN_COMMAND &&
 		CheckDebugDtmActionProtocol(dtxProtocolCommand, contextInfo))
@@ -1505,8 +1515,10 @@ exec_mpp_dtx_protocol_command(DtxProtocolCommand dtxProtocolCommand,
 	if (Debug_dtm_action == DEBUG_DTM_ACTION_FAIL_END_COMMAND && 
 		CheckDebugDtmActionProtocol(dtxProtocolCommand, contextInfo))
 	{
-		elog(ERROR,"Raise error for debug_dtm_action = %d, debug_dtm_action_protocol = %s",
-			 Debug_dtm_action, DtxProtocolCommandToString(dtxProtocolCommand));
+		ereport(ERROR,
+				(errcode(ERRCODE_FAULT_INJECT),
+				 errmsg("Raise error for debug_dtm_action = %d, debug_dtm_action_protocol = %s",
+						Debug_dtm_action, DtxProtocolCommandToString(dtxProtocolCommand))));
 	}
 
 	EndCommand(commandTag, dest);
@@ -1655,8 +1667,10 @@ exec_simple_query(const char *query_string, const char *seqServerHost, int seqSe
 		if (Debug_dtm_action == DEBUG_DTM_ACTION_FAIL_BEGIN_COMMAND &&
 			CheckDebugDtmActionSqlCommandTag(commandTag))
 		{
-			elog(ERROR,"Raise ERROR for debug_dtm_action = %d, commandTag = %s",
-				 Debug_dtm_action, commandTag);
+			ereport(ERROR,
+					(errcode(ERRCODE_FAULT_INJECT),
+					 errmsg("Raise ERROR for debug_dtm_action = %d, commandTag = %s",
+							Debug_dtm_action, commandTag)));
 		}
 
 		/*
@@ -1685,6 +1699,13 @@ exec_simple_query(const char *query_string, const char *seqServerHost, int seqSe
 					(errcode(ERRCODE_IN_FAILED_SQL_TRANSACTION),
 					 errmsg("current transaction is aborted, "
 						"commands ignored until end of transaction block")));
+
+		/*
+		 * If the last statement in the parsetree is 'COMMIT', the dtx context
+		 * is already destroyed, and the transaction context is set to 'DTX_CONTEXT_LOCAL_ONLY'
+		 */
+		if (Gp_role == GP_ROLE_DISPATCH)
+			setupRegularDtxContext();
 
 		/* Make sure we are in a transaction command */
 		start_xact_command();
@@ -1829,8 +1850,10 @@ exec_simple_query(const char *query_string, const char *seqServerHost, int seqSe
 		if (Debug_dtm_action == DEBUG_DTM_ACTION_FAIL_END_COMMAND &&
 			CheckDebugDtmActionSqlCommandTag(commandTag))
 		{
-			elog(ERROR,"Raise ERROR for debug_dtm_action = %d, commandTag = %s",
-				 Debug_dtm_action, commandTag);
+			ereport(ERROR,
+					(errcode(ERRCODE_FAULT_INJECT),
+					 errmsg("Raise ERROR for debug_dtm_action = %d, commandTag = %s",
+							Debug_dtm_action, commandTag)));
 		}
 
 		SIMPLE_FAULT_INJECTOR(ExecSimpleQueryEndCommand);
@@ -3457,7 +3480,7 @@ die(SIGNAL_ARGS)
 			DisableCatchupInterrupt();
 			DisableClientWaitTimeoutInterrupt();
 			InterruptHoldoffCount--;
-			ProcessInterrupts();
+			ProcessInterrupts(__FILE__, __LINE__);
 		}
 	}
 
@@ -3515,7 +3538,7 @@ StatementCancelHandler(SIGNAL_ARGS)
 			DisableNotifyInterrupt();
 			DisableCatchupInterrupt();
 			InterruptHoldoffCount--;
-			ProcessInterrupts();
+			ProcessInterrupts(__FILE__, __LINE__);
 		}
 	}
 
@@ -3608,9 +3631,12 @@ SigHupHandler(SIGNAL_ARGS)
  * If an interrupt condition is pending, and it's safe to service it,
  * then clear the flag and accept the interrupt.  Called only when
  * InterruptPending is true.
+ *
+ * Parameters filename and lineno contain the file name and the line number where
+ * ProcessInterrupts was invoked, respectively.
  */
 void
-ProcessInterrupts(void)
+ProcessInterrupts(const char* filename, int lineno)
 {
 
 #ifdef USE_TEST_UTILS
@@ -3667,7 +3693,7 @@ ProcessInterrupts(void)
 
 	if (QueryCancelPending)
 	{
-		elog(LOG,"Process interrupt for 'query cancel pending'.");
+		elog(LOG,"Process interrupt for 'query cancel pending' (%s:%d)", filename, lineno);
 
 		QueryCancelPending = false;
 
@@ -4067,7 +4093,7 @@ process_postgres_switches(int argc, char *argv[], GucContext ctx,
 	 * postmaster/postmaster.c (the option sets should not conflict) and with
 	 * the common help() function in main/main.c.
 	 */
-	while ((flag = getopt(argc, argv, "A:B:b:C:c:D:d:EeFf:h:ijk:m:lN:nOo:Pp:r:S:sTt:Uv:W:x:y:z:-:")) != -1)
+	while ((flag = getopt(argc, argv, "A:B:bc:D:d:EeFf:h:ijk:m:lN:nOo:Pp:r:S:sTt:Uv:W:x:y:-:")) != -1)
 	{
 		switch (flag)
 		{
@@ -4079,13 +4105,10 @@ process_postgres_switches(int argc, char *argv[], GucContext ctx,
 				SetConfigOption("shared_buffers", optarg, ctx, gucsource);
 				break;
 
-            case 'b':
-                SetConfigOption("gp_dbid", optarg, ctx, gucsource);
-                break;
-
-            case 'C':
-                SetConfigOption("gp_contentid", optarg, ctx, gucsource);
-                break;
+			case 'b':
+				/* Undocumented flag used for binary upgrades */
+				IsBinaryUpgrade = true;
+				break;
 
 			case 'D':
 				if (secure)
@@ -4269,10 +4292,6 @@ process_postgres_switches(int argc, char *argv[], GucContext ctx,
 			case 'x': /* standby master dbid */
 				SetConfigOption("gp_standby_dbid", optarg, ctx, gucsource);
 				break;
-            case 'z':
-                SetConfigOption("gp_num_contents_in_cluster", 
-								optarg, ctx, gucsource);
-                break;
 
 			default:
 				errs++;
@@ -4334,9 +4353,8 @@ PostgresMain(int argc, char *argv[],
 	StringInfoData input_message;
 	sigjmp_buf local_sigjmp_buf;
 	volatile bool send_ready_for_query = true;
-	int topErrLevel;
 
-	MemoryAccount *postgresMainMemoryAccount = NULL;
+	MemoryAccountIdType postgresMainMemoryAccountId = MEMORY_OWNER_TYPE_Undefined;
 	
         /*
 	 * CDB: Catch program error signals.
@@ -4367,8 +4385,8 @@ PostgresMain(int argc, char *argv[],
 	 * In that case, we risk switching to a stale memoryAccount that is no
 	 * longer valid. This is because we reset the memory accounts frequently.
 	 */
-	postgresMainMemoryAccount = MemoryAccounting_CreateAccount(0, MEMORY_OWNER_TYPE_MainEntry);
-	MemoryAccounting_SwitchAccount(postgresMainMemoryAccount);
+	postgresMainMemoryAccountId = MemoryAccounting_CreateAccount(0, MEMORY_OWNER_TYPE_MainEntry);
+	MemoryAccounting_SwitchAccount(postgresMainMemoryAccountId);
 
 	set_ps_display("startup", false);
 
@@ -4718,7 +4736,11 @@ PostgresMain(int argc, char *argv[],
 		 * Make sure debug_query_string gets reset before we possibly clobber
 		 * the storage it points at.
 		 */
-		debug_query_string = NULL;
+		if (debug_query_string != NULL)
+		{
+			write_stderr("An exception was encountered during the execution of statement: %s", debug_query_string);
+			debug_query_string = NULL;
+		}
 
 		/* No active snapshot any more either */
 		ActiveSnapshot = NULL;
@@ -4730,16 +4752,6 @@ PostgresMain(int argc, char *argv[],
 
 		if (am_walsender)
 			WalSndErrorCleanup();
-
-		topErrLevel = elog_getelevel();
-		if (topErrLevel <= ERROR)
-		{
-			/*
-			 * Let's see if the DTM has phase 2 retry work.
-			 */
-			if (Gp_role == GP_ROLE_DISPATCH)
-				doDtxPhase2Retry();
-		}
 
 		/*
 		 * Now return to normal top-level context and clear ErrorContext for
@@ -4758,6 +4770,10 @@ PostgresMain(int argc, char *argv[],
 
 		/* We don't have a transaction command open anymore */
 		xact_started = false;
+
+		/* When QE error in creating extension, we must reset CurrentExtensionObject */
+		creating_extension = false;
+		CurrentExtensionObject = InvalidOid;
 
 		/* Inform Vmem tracker that the current process has finished cleanup */
 		RunawayCleaner_RunawayCleanupDoneForProcess(false /* ignoredCleanup */);
@@ -4791,7 +4807,25 @@ PostgresMain(int argc, char *argv[],
 		MemoryContextSwitchTo(MessageContext);
 		MemoryContextResetAndDeleteChildren(MessageContext);
 		VmemTracker_ResetMaxVmemReserved();
-		MemoryAccounting_ResetPeakBalance();
+
+		/* Reset memory accounting */
+
+		/*
+		 * We finished processing the last query and currently we are not under
+		 * any transaction. So reset memory accounting. Note: any memory
+		 * allocated before resetting will go into the rollover memory account,
+		 * allocated under top memory context.
+		 */
+		MemoryAccounting_Reset();
+
+		postgresMainMemoryAccountId = MemoryAccounting_CreateAccount(0, MEMORY_OWNER_TYPE_MainEntry);
+		/*
+		 * Don't attempt to save previous memory account. This will be invalid by the time we attempt to restore.
+		 * This is why we are not using our START_MEMORY_ACCOUNT and END_MEMORY_ACCOUNT macros
+		 */
+		MemoryAccounting_SwitchAccount(postgresMainMemoryAccountId);
+
+		/* End of memory accounting setup */
 
 		initStringInfo(&input_message);
 
@@ -4874,7 +4908,7 @@ PostgresMain(int argc, char *argv[],
 			 * This means giving the end user enough time to type in the next SQL statement
 			 *
 			 */
-			if (IdleSessionGangTimeout > 0 && gangsExist())
+			if (IdleSessionGangTimeout > 0 && GangsExist())
 				if (!enable_sig_alarm( IdleSessionGangTimeout /* ms */, false))
 					elog(FATAL, "could not set timer for client wait timeout");
 		}
@@ -4882,28 +4916,6 @@ PostgresMain(int argc, char *argv[],
 		IdleTracker_DeactivateProcess();
 		firstchar = ReadCommand(&input_message);
 		IdleTracker_ActivateProcess();
-
-		if (!IsTransactionOrTransactionBlock())
-		{
-			/* Reset memory accounting */
-
-			/*
-			 * We finished processing the last query and currently we are not under
-			 * any transaction. So reset memory accounting. Note: any memory
-			 * allocated before resetting will go into the rollover memory account,
-			 * allocated under top memory context.
-			 */
-			MemoryAccounting_Reset();
-
-			postgresMainMemoryAccount = MemoryAccounting_CreateAccount(0, MEMORY_OWNER_TYPE_MainEntry);
-			/*
-			 * Don't attempt to save previous memory account. This will be invalid by the time we attempt to restore.
-			 * This is why we are not using our START_MEMORY_ACCOUNT and END_MEMORY_ACCOUNT macros
-			 */
-			MemoryAccounting_SwitchAccount(postgresMainMemoryAccount);
-
-			/* End of memory accounting setup */
-		}
 
 		/*
 		 * (4) disable async signal conditions again.

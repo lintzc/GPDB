@@ -34,12 +34,13 @@
  */
 #include "postgres.h"
 
-#include "access/genam.h"
 #include "access/heapam.h"
 #include "catalog/dependency.h"
 #include "catalog/indexing.h"
 #include "catalog/namespace.h"
+#include "catalog/oid_dispatch.h"
 #include "catalog/pg_operator.h"
+#include "commands/alter.h"
 #include "commands/defrem.h"
 #include "miscadmin.h"
 #include "parser/parse_oper.h"
@@ -62,8 +63,7 @@ static void AlterOperatorOwner_internal(Relation rel, Oid operOid, Oid newOwnerI
  * 'parameters' is a list of DefElem
  */
 void
-DefineOperator(List *names, List *parameters,
-			   Oid newOid, Oid newCommutatorOid, Oid newNegatorOid)
+DefineOperator(List *names, List *parameters)
 {
 	char	   *oprName;
 	Oid			oprNamespace;
@@ -80,7 +80,6 @@ DefineOperator(List *names, List *parameters,
 	List	   *restrictionName = NIL;	/* optional restrict. sel. procedure */
 	List	   *joinName = NIL; /* optional join sel. procedure */
 	ListCell   *pl;
-	Oid    opOid;
 
 	/* Convert list of names to a name and namespace */
 	oprNamespace = QualifiedNameGetCreationNamespace(names, &oprName);
@@ -161,7 +160,7 @@ DefineOperator(List *names, List *parameters,
 	/*
 	 * now have OperatorCreate do all the work..
 	 */
-	opOid = OperatorCreateWithOid(oprName,		/* operator name */
+	OperatorCreate(oprName,		/* operator name */
 				   oprNamespace,	/* namespace */
 				   typeId1,		/* left type id */
 				   typeId2,		/* right type id */
@@ -171,10 +170,7 @@ DefineOperator(List *names, List *parameters,
 				   restrictionName,		/* optional restrict. sel. procedure */
 				   joinName,	/* optional join sel. procedure name */
 				   canMerge,	/* operator merges */
-				   canHash,	/* operator hashes */
-				   newOid,
-				   &newCommutatorOid,
-				   &newNegatorOid);
+				   canHash);	/* operator hashes */
 
 	if (Gp_role == GP_ROLE_DISPATCH)
 	{
@@ -184,14 +180,11 @@ DefineOperator(List *names, List *parameters,
 		stmt->defnames = names;
 		stmt->args = NIL;
 		stmt->definition = parameters;
-		stmt->newOid = opOid;
-		stmt->commutatorOid = newCommutatorOid;
-		stmt->negatorOid = newNegatorOid;
-		stmt->arrayOid = InvalidOid;
 		CdbDispatchUtilityStatement((Node *) stmt,
 									DF_CANCEL_ON_ERROR|
 									DF_WITH_SNAPSHOT|
 									DF_NEED_TWO_PHASE,
+									GetAssignedOidsForDispatch(),
 									NULL);
 	}
 }
@@ -254,6 +247,7 @@ RemoveOperator(RemoveFuncStmt *stmt)
 									DF_CANCEL_ON_ERROR|
 									DF_WITH_SNAPSHOT|
 									DF_NEED_TWO_PHASE,
+									NIL,
 									NULL);
 	}
 }
@@ -372,4 +366,57 @@ AlterOperatorOwner_internal(Relation rel, Oid operOid, Oid newOwnerId)
 	}
 
 	heap_freetuple(tup);
+}
+
+/*
+ * Execute ALTER OPERATOR SET SCHEMA
+ */
+void
+AlterOperatorNamespace(List *names, List *argtypes, const char *newschema)
+{
+	List	   *operatorName = names;
+	TypeName   *typeName1 = (TypeName *) linitial(argtypes);
+	TypeName   *typeName2 = (TypeName *) lsecond(argtypes);
+	Oid			operOid,
+				nspOid;
+	Relation	rel;
+
+	rel = heap_open(OperatorRelationId, RowExclusiveLock);
+
+	Assert(list_length(argtypes) == 2);
+	operOid = LookupOperNameTypeNames(NULL, operatorName,
+									  typeName1, typeName2,
+									  false, -1);
+
+	/* get schema OID */
+	nspOid = LookupCreationNamespace(newschema);
+
+	AlterObjectNamespace(rel, OPEROID, -1,
+						 operOid, nspOid,
+						 Anum_pg_operator_oprname,
+						 Anum_pg_operator_oprnamespace,
+						 Anum_pg_operator_oprowner,
+						 ACL_KIND_OPER);
+
+	heap_close(rel, RowExclusiveLock);
+}
+
+Oid
+AlterOperatorNamespace_oid(Oid operOid, Oid newNspOid)
+{
+	Oid			oldNspOid;
+	Relation	rel;
+
+	rel = heap_open(OperatorRelationId, RowExclusiveLock);
+
+	oldNspOid = AlterObjectNamespace(rel, OPEROID, -1,
+									 operOid, newNspOid,
+									 Anum_pg_operator_oprname,
+									 Anum_pg_operator_oprnamespace,
+									 Anum_pg_operator_oprowner,
+									 ACL_KIND_OPER);
+
+	heap_close(rel, RowExclusiveLock);
+
+	return oldNspOid;
 }

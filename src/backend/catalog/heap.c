@@ -46,7 +46,9 @@
 #include "catalog/pg_attrdef.h"
 #include "catalog/pg_attribute_encoding.h"
 #include "catalog/pg_authid.h"
+#include "catalog/pg_auth_members.h"
 #include "catalog/pg_constraint.h"
+#include "catalog/pg_database.h"
 #include "catalog/pg_exttable.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_namespace.h"
@@ -99,15 +101,14 @@ static void AddNewRelationTuple(Relation pg_class_desc,
 					char relkind,
 					char relstorage,
 					Datum reloptions);
-static Oid AddNewRelationType(Oid new_type_oid,
-				   const char *typeName,
+static Oid AddNewRelationType(const char *typeName,
 				   Oid typeNamespace,
 				   Oid new_rel_oid,
 				   char new_rel_kind,
 				   Oid ownerid,
 				   Oid new_array_type);
 static void RelationRemoveInheritance(Oid relid);
-static Oid StoreRelCheck(Relation rel, char *ccname, char *ccbin, Oid conoid);
+static void StoreRelCheck(Relation rel, char *ccname, char *ccbin);
 static Node* cookConstraint (ParseState *pstate,
 							 Node 		*raw_constraint,
 							 char		*relname);
@@ -1190,8 +1191,7 @@ AddNewRelationTuple(Relation pg_class_desc,
  * --------------------------------
  */
 static Oid
-AddNewRelationType(Oid new_type_oid,
-				   const char *typeName,
+AddNewRelationType(const char *typeName,
 				   Oid typeNamespace,
 				   Oid new_rel_oid,
 				   char new_rel_kind,
@@ -1199,34 +1199,34 @@ AddNewRelationType(Oid new_type_oid,
 				   Oid new_array_type)
 {
 	return
-		TypeCreate(new_type_oid,	/* can have a predetermined OID in bootstrap */
-				   typeName,		/* type name */
-				   typeNamespace,	/* type namespace */
-				   new_rel_oid, 	/* relation oid */
+		TypeCreate(InvalidOid,	/* no predetermined OID */
+				   typeName,	/* type name */
+				   typeNamespace,		/* type namespace */
+				   new_rel_oid, /* relation oid */
 				   new_rel_kind,	/* relation kind */
-				   ownerid,			/* owner's ID */
-				   -1,				/* internal size (varlena) */
-				   'c',				/* type-type (complex) */
-				   DEFAULT_TYPDELIM,/* default array delimiter */
-				   F_RECORD_IN,		/* input procedure */
+				   ownerid,		/* owner's ID */
+				   -1,			/* internal size (varlena) */
+				   'c',			/* type-type (complex) */
+				   DEFAULT_TYPDELIM,	/* default array delimiter */
+				   F_RECORD_IN, /* input procedure */
 				   F_RECORD_OUT,	/* output procedure */
-				   F_RECORD_RECV,	/* receive procedure */
-				   F_RECORD_SEND,	/* send procedure */
-				   InvalidOid,		/* typmodin procedure - none */
-				   InvalidOid,		/* typmodout procedure - none */
-				   InvalidOid,		/* analyze procedure - default */
-				   InvalidOid,		/* array element type - irrelevant */
-				   false,			/* this is not an array type */
-				   new_array_type,	/* array type if any */
-				   InvalidOid,		/* domain base type - irrelevant */
-				   NULL,			/* default value - none */
-				   NULL,			/* default binary representation */
-				   false,			/* passed by reference */
-				   'd',				/* alignment - must be the largest! */
-				   'x',				/* fully TOASTable */
-				   -1,				/* typmod */
-				   0,				/* array dimensions for typBaseType */
-				   false);			/* Type NOT NULL */
+				   F_RECORD_RECV,		/* receive procedure */
+				   F_RECORD_SEND,		/* send procedure */
+				   InvalidOid,	/* typmodin procedure - none */
+				   InvalidOid,	/* typmodout procedure - none */
+				   InvalidOid,	/* analyze procedure - default */
+				   InvalidOid,	/* array element type - irrelevant */
+				   false,		/* this is not an array type */
+				   new_array_type,		/* array type if any */
+				   InvalidOid,	/* domain base type - irrelevant */
+				   NULL,		/* default value - none */
+				   NULL,		/* default binary representation */
+				   false,		/* passed by reference */
+				   'd',			/* alignment - must be the largest! */
+				   'x',			/* fully TOASTable */
+				   -1,			/* typmod */
+				   0,			/* array dimensions for typBaseType */
+				   false);		/* Type NOT NULL */
 }
 
 void
@@ -1234,6 +1234,7 @@ InsertGpRelationNodeTuple(
 	Relation 		gp_relation_node,
 	Oid				relationId,
 	char			*relname,
+	Oid				tablespaceOid,
 	Oid				relfilenode,
 	int32			segmentFileNum,
 	bool			updateIndex,
@@ -1269,8 +1270,15 @@ InsertGpRelationNodeTuple(
 			 persistentSerialNum,
 			 ItemPointerToString(persistentTid));
 
+	/*
+	 * gp_relation_node stores tablespaceOId in pg_class fashion, which means
+	 * defaultTablespace is represented as "0".
+	 */
+	Assert (tablespaceOid != MyDatabaseTableSpace);
+	
 	GpRelationNode_SetDatumValues(
 								values,
+								tablespaceOid,
 								relfilenode,
 								segmentFileNum,
 								/* createMirrorDataLossTrackingSessionNum */ 0,
@@ -1295,6 +1303,7 @@ void
 UpdateGpRelationNodeTuple(
 	Relation 	gp_relation_node,
 	HeapTuple 	tuple,
+	Oid         tablespaceOid,
 	Oid			relfilenode,
 	int32		segmentFileNum,
 	ItemPointer persistentTid,
@@ -1326,6 +1335,9 @@ UpdateGpRelationNodeTuple(
 	memset(repl_val, 0, sizeof(repl_val));
 	memset(repl_null, false, sizeof(repl_null));
 	memset(repl_repl, false, sizeof(repl_null));
+
+	repl_repl[Anum_gp_relation_node_tablespace_oid - 1] = true;
+	repl_val[Anum_gp_relation_node_tablespace_oid - 1] = ObjectIdGetDatum(tablespaceOid);
 
 	repl_repl[Anum_gp_relation_node_relfilenode_oid - 1] = true;
 	repl_val[Anum_gp_relation_node_relfilenode_oid - 1] = ObjectIdGetDatum(relfilenode);
@@ -1362,6 +1374,7 @@ AddNewRelationNodeTuple(
 							gp_relation_node,
 							new_rel->rd_id,
 							new_rel->rd_rel->relname.data,
+							new_rel->rd_rel->reltablespace,
 							new_rel->rd_rel->relfilenode,
 							/* segmentFileNum */ 0,
 							/* updateIndex */ true,
@@ -1396,8 +1409,6 @@ heap_create_with_catalog(const char *relname,
 						 Datum reloptions,
 						 bool allow_system_table_mods,
 						 bool valid_opts,
-						 Oid *comptypeOid,
-						 Oid *comptypeArrayOid,
 						 ItemPointer persistentTid,
 						 int64 *persistentSerialNum)
 {
@@ -1410,22 +1421,61 @@ heap_create_with_catalog(const char *relname,
 	bool		appendOnlyRel;
 	StdRdOptions *stdRdOptions;
 	int			safefswritesize = gp_safefswritesize;
-	bool		rowtype_already_exists;
-
-	if (comptypeArrayOid)
-	    new_array_oid = *comptypeArrayOid;
+	Oid			existing_rowtype_oid = InvalidOid;
+	char	   *relarrayname = NULL;
 
 	/*
 	 * Don't create the row type if the bootstrapper tells us it already
 	 * knows what it is.
 	 */
-	rowtype_already_exists =
-		(IsBootstrapProcessingMode() &&
-		 (PointerIsValid(comptypeOid) && OidIsValid(*comptypeOid)));
-
-	if (PointerIsValid(comptypeArrayOid))
+	if (IsBootstrapProcessingMode())
 	{
-	    new_array_oid = *comptypeArrayOid;
+		/*
+		 * Some relations need to have a fixed relation type
+		 * OID, because it is referenced in code.
+		 *
+		 * GPDB_90_MERGE_FIXME: In PostgreSQL 9.0, there's a
+		 * new BKI directive, BKI_ROWTYPE_OID(<oid>), for
+		 * doing the same. Replace this hack with that once
+		 * we merge with 9.0.
+		 */
+		switch (relid)
+		{
+			case GpPersistentRelationNodeRelationId:
+				existing_rowtype_oid = GP_PERSISTENT_RELATION_NODE_OID;
+				break;
+			case GpPersistentDatabaseNodeRelationId:
+				existing_rowtype_oid = GP_PERSISTENT_DATABASE_NODE_OID;
+				break;
+			case GpPersistentTablespaceNodeRelationId:
+				existing_rowtype_oid = GP_PERSISTENT_TABLESPACE_NODE_OID;
+				break;
+			case GpPersistentFilespaceNodeRelationId:
+				existing_rowtype_oid = GP_PERSISTENT_FILESPACE_NODE_OID;
+				break;
+			case GpRelationNodeRelationId:
+				existing_rowtype_oid = GP_RELATION_NODE_OID;
+				break;
+
+			case GpGlobalSequenceRelationId:
+				existing_rowtype_oid = GP_GLOBAL_SEQUENCE_RELTYPE_OID;
+				break;
+
+			case DatabaseRelationId:
+				existing_rowtype_oid = PG_DATABASE_RELTYPE_OID;
+				break;
+
+			case AuthIdRelationId:
+				existing_rowtype_oid = PG_AUTHID_RELTYPE_OID;
+				break;
+
+			case AuthMemRelationId:
+				existing_rowtype_oid = PG_AUTH_MEMBERS_RELTYPE_OID;
+				break;
+
+			default:
+				break;
+		}
 	}
 
 	pg_class_desc = heap_open(RelationRelationId, RowExclusiveLock);
@@ -1504,7 +1554,7 @@ heap_create_with_catalog(const char *relname,
 								  CStringGetDatum(relname),
 								  ObjectIdGetDatum(relnamespace),
 								  0, 0);
-	if (OidIsValid(old_type_oid) && !rowtype_already_exists)
+	if (OidIsValid(old_type_oid) && !OidIsValid(existing_rowtype_oid))
 	{
 		if (!moveArrayTypeName(old_type_oid, relname, relnamespace))
 			ereport(ERROR,
@@ -1539,16 +1589,16 @@ heap_create_with_catalog(const char *relname,
 	 *
 	 * The OID will be the relfilenode as well, so make sure it doesn't
 	 * collide with either pg_class OIDs or existing physical files.
+	 *
+	 * (In GPDB, heap_create can choose a different relfilenode, in a QE node,
+	 * if the one we choose is already in use.)
 	 */
+	if (!OidIsValid(relid) && (Gp_role == GP_ROLE_EXECUTE || IsBinaryUpgrade))
+		relid = GetPreassignedOidForRelation(relnamespace, relname);
+
 	if (!OidIsValid(relid))
 		relid = GetNewRelFileNode(reltablespace, shared_relation,
 								  pg_class_desc);
-	else
-		if (IsUnderPostmaster)
-		{
-			CheckNewRelFileNodeIsOk(relid, reltablespace, shared_relation,
-									pg_class_desc);
-		}
 
 	/*
 	 * Create the relcache entry (mostly dummy at this point) and the physical
@@ -1576,40 +1626,39 @@ heap_create_with_catalog(const char *relname,
 	}
 
 	/*
-	 * Decide whether to create an array type over the relation's rowtype.
-	 * We do not create any array types for system catalogs (ie, those made
-	 * during initdb).  We create array types for regular composite types ...
-	 * but not, eg, for toast tables or sequences.
-	 */
-	if (IsUnderPostmaster &&
-		relkind == RELKIND_COMPOSITE_TYPE &&
-		!OidIsValid(new_array_oid))
-	{
-		/* OK, so pre-assign a type OID for the array type */
-		Relation pg_type = heap_open(TypeRelationId, AccessShareLock);
-		new_array_oid = GetNewOid(pg_type);
-		heap_close(pg_type, AccessShareLock);
-	}
-
-	/*
-	 * Since defining a relation also defines a complex type, we add a new
-	 * system type corresponding to the new relation.
+	 * Decide whether to create an array type over the relation's rowtype. We
+	 * do not create any array types for system catalogs (ie, those made
+	 * during initdb).	We create array types for regular relations, views,
+	 * and composite types ... but not, eg, for toast tables or sequences.
 	 *
-	 * NOTE: we could get a unique-index failure here, in case the same name
-	 * has already been used for a type.
-	 *
-	 * Also not for the auxiliary heaps created for bitmap indexes.
+	 * Also not for the auxiliary heaps created for bitmap indexes or append-
+	 * only tables.
 	 */
-	if (IsUnderPostmaster && (relkind == RELKIND_RELATION ||
+	if (IsUnderPostmaster && ((relkind == RELKIND_RELATION && !appendOnlyRel) ||
 							  relkind == RELKIND_VIEW ||
 							  relkind == RELKIND_COMPOSITE_TYPE) &&
-		relnamespace != PG_BITMAPINDEX_NAMESPACE &&
-		!OidIsValid(new_array_oid))
+		relnamespace != PG_BITMAPINDEX_NAMESPACE)
 	{
 		/* OK, so pre-assign a type OID for the array type */
 		Relation	pg_type = heap_open(TypeRelationId, AccessShareLock);
 
-		new_array_oid = GetNewOid(pg_type);
+		relarrayname = makeArrayTypeName(relname, relnamespace);
+
+		/*
+		 * If we are expected to get a preassigned Oid but receive InvalidOid,
+		 * get a new Oid. This can happen during upgrades from GPDB4 to 5 where
+		 * array types over relation rowtypes were introduced so there are no
+		 * pre-existing array types to dump from the old cluster
+		 */
+		if (Gp_role == GP_ROLE_EXECUTE || IsBinaryUpgrade)
+		{
+			new_array_oid = GetPreassignedOidForType(relnamespace, relarrayname);
+
+			if (new_array_oid == InvalidOid && IsBinaryUpgrade)
+				new_array_oid = GetNewOid(pg_type);
+		}
+		else
+			new_array_oid = GetNewOid(pg_type);
 		heap_close(pg_type, AccessShareLock);
 	}
 
@@ -1621,19 +1670,16 @@ heap_create_with_catalog(const char *relname,
 	 * creating the same type name in parallel but hadn't committed yet when
 	 * we checked for a duplicate name above.
 	 */
-	if (rowtype_already_exists)
-		new_type_oid = *comptypeOid;
+	if (existing_rowtype_oid != InvalidOid)
+		new_type_oid = existing_rowtype_oid;
 	else
 	{
-		new_type_oid = AddNewRelationType(comptypeOid ? *comptypeOid : InvalidOid,
-										  relname,
+		new_type_oid = AddNewRelationType(relname,
 										  relnamespace,
 										  relid,
 										  relkind,
 										  ownerid,
 										  new_array_oid);
-		if (comptypeOid)
-			*comptypeOid = new_type_oid;
 	}
 
 	/*
@@ -1641,9 +1687,8 @@ heap_create_with_catalog(const char *relname,
 	 */
 	if (OidIsValid(new_array_oid))
 	{
-		char	*relarrayname;
-
-		relarrayname = makeArrayTypeName(relname, relnamespace);
+		if (!relarrayname)
+			relarrayname = makeArrayTypeName(relname, relnamespace);
 
 		TypeCreate(new_array_oid,		/* force the type's OID to this */
 				   relarrayname,	/* Array type name */
@@ -1673,9 +1718,6 @@ heap_create_with_catalog(const char *relname,
 				   -1,			/* typmod */
 				   0,			/* array dimensions for typBaseType */
 				   false);		/* Type NOT NULL */
-
-		if (comptypeArrayOid)
-			*comptypeArrayOid = new_array_oid;
 
 		pfree(relarrayname);
 	}
@@ -1758,6 +1800,8 @@ heap_create_with_catalog(const char *relname,
 		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 
 		recordDependencyOnOwner(RelationRelationId, relid, ownerid);
+
+		recordDependencyOnCurrentExtension(&myself, false);
 	}
 
 	/*
@@ -1777,8 +1821,7 @@ heap_create_with_catalog(const char *relname,
      * key column list in the gp_distribution_policy catalog and attach a
      * copy to the relcache entry.
      */
-    if (policy &&
-        Gp_role == GP_ROLE_DISPATCH)
+    if (policy && (Gp_role == GP_ROLE_DISPATCH || IsBinaryUpgrade))
     {
         Assert(relkind == RELKIND_RELATION);
         new_rel_desc->rd_cdbpolicy = GpPolicyCopy(GetMemoryChunkContext(new_rel_desc), policy);
@@ -1847,7 +1890,7 @@ heap_create_with_catalog(const char *relname,
 	heap_close(pg_class_desc, RowExclusiveLock);
 
 	return relid;
-} /* end heap_create_with_catalog */
+}
 
 
 /*
@@ -2116,14 +2159,12 @@ RemoveAttributeById(Oid relid, AttrNumber attnum)
 }
 
 /*
- * RemoveAttrDefault
+ *		RemoveAttrDefault
  *
- * If the specified relation/attribute has a default, remove it and return its
- * old pg_attrdef.oid. The caller can use this oid for the new default if it
- * needs to create another one. If no default, raise error if complain is true,
- * else return InvalidOid.
+ * If the specified relation/attribute has a default, remove it.
+ * (If no default, raise error if complain is true, else return quietly.)
  */
-Oid
+void
 RemoveAttrDefault(Oid relid, AttrNumber attnum,
 				  DropBehavior behavior, bool complain)
 {
@@ -2132,7 +2173,6 @@ RemoveAttrDefault(Oid relid, AttrNumber attnum,
 	SysScanDesc scan;
 	HeapTuple	tuple;
 	bool		found = false;
-	Oid			adoid = InvalidOid;
 
 	attrdef_rel = heap_open(AttrDefaultRelationId, RowExclusiveLock);
 
@@ -2160,7 +2200,6 @@ RemoveAttrDefault(Oid relid, AttrNumber attnum,
 		performDeletion(&object, behavior);
 
 		found = true;
-		adoid = object.objectId;
 	}
 
 	systable_endscan(scan);
@@ -2169,8 +2208,6 @@ RemoveAttrDefault(Oid relid, AttrNumber attnum,
 	if (complain && !found)
 		elog(ERROR, "could not find attrdef tuple for relation %u attnum %d",
 			 relid, attnum);
-
-	return adoid;
 }
 
 /*
@@ -2299,6 +2336,7 @@ remove_gp_relation_node_and_schedule_drop(Relation rel)
 						SnapshotNow,
 						relNodeRelation,
 						rel->rd_id,
+						rel->rd_rel->reltablespace,
 						rel->rd_rel->relfilenode,
 						&gpRelationNodeScan);
 		
@@ -2468,8 +2506,8 @@ heap_drop_with_catalog(Oid relid)
  * Store a default expression for column attnum of relation rel.
  * The expression must be presented as a nodeToString() string.
  */
-Oid
-StoreAttrDefault(Relation rel, AttrNumber attnum, Node *expr, Oid attrdefOid)
+void
+StoreAttrDefault(Relation rel, AttrNumber attnum, Node *expr)
 {
 	char	   *adsrc;
 	Relation	adrel;
@@ -2479,6 +2517,7 @@ StoreAttrDefault(Relation rel, AttrNumber attnum, Node *expr, Oid attrdefOid)
 	Relation	attrrel;
 	HeapTuple	atttup;
 	Form_pg_attribute attStruct;
+	Oid			attrdefOid;
 	ObjectAddress colobject,
 				defobject;
 
@@ -2505,9 +2544,6 @@ StoreAttrDefault(Relation rel, AttrNumber attnum, Node *expr, Oid attrdefOid)
 
 	tuple = heap_form_tuple(adrel->rd_att, values, nulls);
 
-	/* force tuple to have the desired OID */
-	if (OidIsValid(attrdefOid))
-		HeapTupleSetOid(tuple, attrdefOid);
 	attrdefOid = simple_heap_insert(adrel, tuple);
 
 	CatalogUpdateIndexes(adrel, tuple);
@@ -2561,8 +2597,6 @@ StoreAttrDefault(Relation rel, AttrNumber attnum, Node *expr, Oid attrdefOid)
 	 * Record dependencies on objects used in the expression, too.
 	 */
 	recordDependencyOnExpr(&defobject, expr, NIL, DEPENDENCY_NORMAL);
-
-	return attrdefOid;
 }
 
 /*
@@ -2571,11 +2605,9 @@ StoreAttrDefault(Relation rel, AttrNumber attnum, Node *expr, Oid attrdefOid)
  *
  * Caller is responsible for updating the count of constraints
  * in the pg_class entry for the relation.
- *
- * Return OID of the newly created constraint entry.
  */
-static Oid
-StoreRelCheck(Relation rel, char *ccname, char *ccbin, Oid conOid)
+static void
+StoreRelCheck(Relation rel, char *ccname, char *ccbin)
 {
 	Node	   *expr;
 	char	   *ccsrc;
@@ -2631,8 +2663,7 @@ StoreRelCheck(Relation rel, char *ccname, char *ccbin, Oid conOid)
 	/*
 	 * Create the Check Constraint
 	 */
-	conOid = CreateConstraintEntry(ccname,		/* Constraint Name */
-						  conOid,		/* Constraint Oid */
+	CreateConstraintEntry(ccname,		/* Constraint Name */
 						  RelationGetNamespace(rel),	/* namespace */
 						  CONSTRAINT_CHECK,		/* Constraint Type */
 						  false,	/* Is Deferrable */
@@ -2656,7 +2687,6 @@ StoreRelCheck(Relation rel, char *ccname, char *ccbin, Oid conOid)
 						  ccsrc);		/* Source form check constraint */
 
 	pfree(ccsrc);
-	return conOid;
 }
 
 /*
@@ -2758,8 +2788,7 @@ AddRelationConstraints(Relation rel,
 			(IsA(expr, Const) &&((Const *) expr)->constisnull))
 			continue;
 
-		colDef->default_oid = StoreAttrDefault(rel, colDef->attnum,
-											   expr, colDef->default_oid);
+		StoreAttrDefault(rel, colDef->attnum, expr);
 
 		cooked = (CookedConstraint *) palloc(sizeof(CookedConstraint));
 		cooked->contype = CONSTR_DEFAULT;
@@ -2871,7 +2900,7 @@ AddRelationConstraints(Relation rel,
 		/*
 		 * OK, store it.
 		 */
-		cdef->conoid = StoreRelCheck(rel, ccname, nodeToString(expr), cdef->conoid);
+		StoreRelCheck(rel, ccname, nodeToString(expr));
 
 		numchecks++;
 

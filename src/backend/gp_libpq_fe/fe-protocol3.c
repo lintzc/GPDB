@@ -243,7 +243,8 @@ pqParseInput3(PGconn *conn)
 						if (!conn->result)
 							return;
 					}
-					strncpy(conn->result->cmdStatus, conn->workBuffer.data, CMDSTATUS_LEN);
+					strlcpy(conn->result->cmdStatus, conn->workBuffer.data,
+							CMDSTATUS_LEN);
 					conn->asyncStatus = PGASYNC_READY;
 
 					break;
@@ -504,9 +505,8 @@ pqParseInput3(PGconn *conn)
 						if (!conn->result)
 							return;
 					}
-					strncpy(conn->result->cmdStatus, conn->workBuffer.data,
+					strlcpy(conn->result->cmdStatus, conn->workBuffer.data,
 							CMDSTATUS_LEN);
-					
 					
 					if (pqGetInt(&conn->result->extraslen, 4, conn))
 						return;
@@ -2236,8 +2236,6 @@ build_startup_packet(const PGconn *conn, char *packet,
 			if (pg_strcasecmp(val, "default") != 0)
 				ADD_STARTUP_OPTION(next_eo->pgName, val);
 		}
-		if (conn->pgoptions && conn->pgoptions[0])
-			ADD_STARTUP_OPTION("options", conn->pgoptions);
 	}
 
 	/* Add trailing terminator */

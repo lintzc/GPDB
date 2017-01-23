@@ -4,14 +4,10 @@
  *
  * Copyright (c) 2009, Greenplum Inc.
  *
- * $Id: $
- * $Change: $
- * $DateTime: $
- * $Author: $
  *------------------------------------------------------------------------------
  */
-#ifndef APPENDONLYBLOCKDIRECTORY_H
-#define APPENDONLYBLOCKDIRECTORY_H
+#ifndef CDBAPPENDONLYBLOCKDIRECTORY_H
+#define CDBAPPENDONLYBLOCKDIRECTORY_H
 
 #include "access/aosegfiles.h"
 #include "access/aocssegfiles.h"

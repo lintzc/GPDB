@@ -1843,6 +1843,7 @@ RETURNS TABLE(gp_tid tid,
     eof bigint,
     eof_uncompressed bigint,
     modcount bigint,
+    formatversion smallint,
     state smallint)
 AS '$libdir/gp_ao_co_diagnostics', 'gp_aoseg_history_wrapper'
 LANGUAGE C STRICT;
@@ -1857,6 +1858,7 @@ RETURNS TABLE(gp_tid tid,
     eof bigint,
     eof_uncompressed bigint,
     modcount bigint,
+    formatversion smallint,
     state smallint)
 AS '$libdir/gp_ao_co_diagnostics', 'gp_aocsseg_wrapper'
 LANGUAGE C STRICT;
@@ -1871,6 +1873,7 @@ RETURNS TABLE (gp_tid tid,
     eof bigint,
     eof_uncompressed bigint,
     modcount bigint,
+    formatversion smallint,
     state smallint)
 AS '$libdir/gp_ao_co_diagnostics', 'gp_aocsseg_name_wrapper'
 LANGUAGE C STRICT;
@@ -1895,6 +1898,7 @@ RETURNS TABLE(gp_tid tid,
     eof bigint,
     eof_uncompressed bigint,
     modcount bigint,
+    formatversion smallint,
     state smallint)
 AS '$libdir/gp_ao_co_diagnostics' , 'gp_aocsseg_history_wrapper'
 LANGUAGE C STRICT;
@@ -1954,7 +1958,9 @@ RETURNS TABLE (segno integer, eof bigint,
     tupcount bigint,
     varblockcount bigint,
     eof_uncompressed bigint,
-    modcount bigint, state smallint)
+    modcount bigint,
+    formatversion smallint,
+    state smallint)
 AS '$libdir/gp_ao_co_diagnostics', 'gp_aoseg_name_wrapper'
 LANGUAGE C STRICT;
 GRANT EXECUTE ON FUNCTION gp_toolkit.__gp_aoseg_name(text) TO public;
@@ -2182,26 +2188,6 @@ FROM all_entries
 ORDER BY segid;
 
 GRANT SELECT ON gp_toolkit.gp_workfile_mgr_used_diskspace TO public;
-
---------------------------------------------------------------------------------
--- @function:
---        gp_toolkit.gp_dump_query_oids(text)
---
--- @in:
---        text - SQL text
--- @out:
---        text - serialized json string of oids
---
--- @doc:
---        Dump query oids for a given SQL text
---
---------------------------------------------------------------------------------
-
-CREATE FUNCTION gp_toolkit.gp_dump_query_oids(text)
-RETURNS text
-AS '$libdir/gpoptutils', 'gp_dump_query_oids' LANGUAGE C STRICT;
-
-GRANT EXECUTE ON FUNCTION gp_toolkit.gp_dump_query_oids(text) TO public;
 
 --------------------------------------------------------------------------------
 

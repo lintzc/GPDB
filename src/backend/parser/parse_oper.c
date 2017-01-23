@@ -84,33 +84,6 @@ static Oid	find_oper_cache_entry(OprCacheKey *key);
 static void make_oper_cache_entry(OprCacheKey *key, Oid opr_oid);
 static void InvalidateOprCacheCallBack(Datum arg, int cacheid, ItemPointer tuplePtr);
 
-static HeapTuple fetch_op_tup(Oid oproid, bool bValid);
-/*
- * helper function to fetch operator tuple
- *
- * NOTE: on success, the returned object is a syscache entry.  The caller
- * must ReleaseOperator() the entry when done with it.
- */
-static HeapTuple fetch_op_tup(Oid oproid, bool bValid)
-{
-	HeapTuple	optup = NULL;
-
-	if (OidIsValid(oproid))
-	{
-		optup = SearchSysCache(OPEROID,
-							   ObjectIdGetDatum(oproid),
-							   0, 0, 0);
-		if (bValid && (!HeapTupleIsValid(optup)))		/* should not fail */
-			elog(ERROR, "cache lookup failed for operator %u", oproid);
-	}
-	else
-	{
-		if (bValid)
-			elog(ERROR, "invalid oid for cache lookup: operator %u", oproid);
-	}
-
-	return (optup);
-}
 
 /*
  * LookupOperName
@@ -222,7 +195,7 @@ equality_oper(Oid argtype, bool noError)
 		{
 			optup = equality_oper(elem_type, true);
 			if (optup != NULL)
-				ReleaseOperator(optup);
+				ReleaseSysCache(optup);
 			else
 				oproid = InvalidOid;	/* element type has no "=" */
 		}
@@ -232,8 +205,11 @@ equality_oper(Oid argtype, bool noError)
 
 	if (OidIsValid(oproid))
 	{
-		optup = fetch_op_tup(oproid, true);
-
+		optup = SearchSysCache(OPEROID,
+							   ObjectIdGetDatum(oproid),
+							   0, 0, 0);
+		if (optup == NULL)		/* should not fail */
+			elog(ERROR, "cache lookup failed for operator %u", oproid);
 		return optup;
 	}
 
@@ -283,7 +259,7 @@ ordering_oper(Oid argtype, bool noError)
 		{
 			optup = ordering_oper(elem_type, true);
 			if (optup != NULL)
-				ReleaseOperator(optup);
+				ReleaseSysCache(optup);
 			else
 				oproid = InvalidOid;	/* element type has no "<" */
 		}
@@ -293,8 +269,11 @@ ordering_oper(Oid argtype, bool noError)
 
 	if (OidIsValid(oproid))
 	{
-		optup = fetch_op_tup(oproid, true);
-
+		optup = SearchSysCache(OPEROID,
+							   ObjectIdGetDatum(oproid),
+							   0, 0, 0);
+		if (optup == NULL)		/* should not fail */
+			elog(ERROR, "cache lookup failed for operator %u", oproid);
 		return optup;
 	}
 
@@ -345,7 +324,7 @@ reverse_ordering_oper(Oid argtype, bool noError)
 		{
 			optup = reverse_ordering_oper(elem_type, true);
 			if (optup != NULL)
-				ReleaseOperator(optup);
+				ReleaseSysCache(optup);
 			else
 				oproid = InvalidOid;	/* element type has no ">" */
 		}
@@ -355,8 +334,11 @@ reverse_ordering_oper(Oid argtype, bool noError)
 
 	if (OidIsValid(oproid))
 	{
-		optup = fetch_op_tup(oproid, true);
-
+		optup = SearchSysCache(OPEROID,
+							   ObjectIdGetDatum(oproid),
+							   0, 0, 0);
+		if (optup == NULL)		/* should not fail */
+			elog(ERROR, "cache lookup failed for operator %u", oproid);
 		return optup;
 	}
 
@@ -380,7 +362,7 @@ equality_oper_funcid(Oid argtype)
 
 	optup = equality_oper(argtype, false);
 	result = oprfuncid(optup);
-	ReleaseOperator(optup);
+	ReleaseSysCache(optup);
 	return result;
 }
 
@@ -397,7 +379,7 @@ ordering_oper_opid(Oid argtype)
 
 	optup = ordering_oper(argtype, false);
 	result = oprid(optup);
-	ReleaseOperator(optup);
+	ReleaseSysCache(optup);
 	return result;
 }
 
@@ -413,7 +395,7 @@ equality_oper_opid(Oid argtype)
 
 	optup = equality_oper(argtype, false);
 	result = oprid(optup);
-	ReleaseOperator(optup);
+	ReleaseSysCache(optup);
 	return result;
 }
 
@@ -428,7 +410,7 @@ reverse_ordering_oper_opid(Oid argtype)
 
 	optup = reverse_ordering_oper(argtype, false);
 	result = oprid(optup);
-	ReleaseOperator(optup);
+	ReleaseSysCache(optup);
 	return result;
 }
 
@@ -564,7 +546,7 @@ oper_select_candidate(int nargs,
  * the error position; pass NULL/-1 if not available.
  *
  * NOTE: on success, the returned object is a syscache entry.  The caller
- * must ReleaseOperator() the entry when done with it.
+ * must ReleaseSysCache() the entry when done with it.
  */
 Operator
 oper(ParseState *pstate, List *opname, Oid ltypeId, Oid rtypeId,
@@ -616,9 +598,9 @@ oper(ParseState *pstate, List *opname, Oid ltypeId, Oid rtypeId,
 			 */
 			Oid			inputOids[2];
 
-			if (!OidIsValid(rtypeId))
+			if (rtypeId == InvalidOid)
 				rtypeId = ltypeId;
-			else if (!OidIsValid(ltypeId))
+			else if (ltypeId == InvalidOid)
 				ltypeId = rtypeId;
 			inputOids[0] = ltypeId;
 			inputOids[1] = rtypeId;
@@ -626,7 +608,10 @@ oper(ParseState *pstate, List *opname, Oid ltypeId, Oid rtypeId,
 		}
 	}
 
-	tup = fetch_op_tup(operOid, false);
+	if (OidIsValid(operOid))
+		tup = SearchSysCache(OPEROID,
+							 ObjectIdGetDatum(operOid),
+							 0, 0, 0);
 
 	if (HeapTupleIsValid(tup))
 	{
@@ -665,7 +650,7 @@ compatible_oper(ParseState *pstate, List *op, Oid arg1, Oid arg2,
 		return optup;
 
 	/* nope... */
-	ReleaseOperator(optup);
+	ReleaseSysCache(optup);
 
 	if (!noError)
 		ereport(ERROR,
@@ -693,7 +678,7 @@ compatible_oper_opid(List *op, Oid arg1, Oid arg2, bool noError)
 	if (optup != NULL)
 	{
 		result = oprid(optup);
-		ReleaseOperator(optup);
+		ReleaseSysCache(optup);
 		return result;
 	}
 	return InvalidOid;
@@ -712,7 +697,7 @@ compatible_oper_opid(List *op, Oid arg1, Oid arg2, bool noError)
  * the error position; pass NULL/-1 if not available.
  *
  * NOTE: on success, the returned object is a syscache entry.  The caller
- * must ReleaseOperator() the entry when done with it.
+ * must ReleaseSysCache() the entry when done with it.
  */
 Operator
 right_oper(ParseState *pstate, List *op, Oid arg, bool noError, int location)
@@ -765,7 +750,10 @@ right_oper(ParseState *pstate, List *op, Oid arg, bool noError, int location)
 		}
 	}
 
-	tup = fetch_op_tup(operOid, false);
+	if (OidIsValid(operOid))
+		tup = SearchSysCache(OPEROID,
+							 ObjectIdGetDatum(operOid),
+							 0, 0, 0);
 
 	if (HeapTupleIsValid(tup))
 	{
@@ -791,7 +779,7 @@ right_oper(ParseState *pstate, List *op, Oid arg, bool noError, int location)
  * the error position; pass NULL/-1 if not available.
  *
  * NOTE: on success, the returned object is a syscache entry.  The caller
- * must ReleaseOperator() the entry when done with it.
+ * must ReleaseSysCache() the entry when done with it.
  */
 Operator
 left_oper(ParseState *pstate, List *op, Oid arg, bool noError, int location)
@@ -856,7 +844,10 @@ left_oper(ParseState *pstate, List *op, Oid arg, bool noError, int location)
 		}
 	}
 
-	tup = fetch_op_tup(operOid, false);
+	if (OidIsValid(operOid))
+		tup = SearchSysCache(OPEROID,
+							 ObjectIdGetDatum(operOid),
+							 0, 0, 0);
 
 	if (HeapTupleIsValid(tup))
 	{
@@ -966,7 +957,7 @@ make_op(ParseState *pstate, List *opname, Node *ltree, Node *rtree,
 	/* Do typecasting and build the expression tree */
 	result = make_op_expr(pstate, tup, ltree, rtree, ltypeId, rtypeId);
 
-	ReleaseOperator(tup);
+	ReleaseSysCache(tup);
 
 	return result;
 }
@@ -1082,7 +1073,7 @@ make_scalar_array_op(ParseState *pstate, List *opname,
 	result->useOr = useOr;
 	result->args = args;
 
-	ReleaseOperator(tup);
+	ReleaseSysCache(tup);
 
 	/* Hack to protect pg_get_expr() against misuse */
 	check_pg_get_expr_args(pstate, result->opfuncid, args);

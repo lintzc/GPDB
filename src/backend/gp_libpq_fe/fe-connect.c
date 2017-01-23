@@ -278,6 +278,12 @@ static const PQconninfoOption PQconninfoOptions[] = {
 
 static const PQEnvironmentOption EnvironmentOptions[] =
 {
+	/*
+	 * For QD-QE connections, we should ignore these environment variables,
+	 * since env variable of QD should not effect the GUCs of QE, otherwise, the SET
+	 * command would not work in the newly created Gang then
+	 */
+#if 0
 	/* common user-interface settings */
 	{
 		"PGDATESTYLE", "datestyle"
@@ -292,6 +298,7 @@ static const PQEnvironmentOption EnvironmentOptions[] =
 	{
 		"PGGEQO", "geqo"
 	},
+#endif
 	{
 		NULL, NULL
 	}
@@ -2512,10 +2519,10 @@ freePGconn(PGconn *conn)
 	if (conn->keepalives_count)
 		free(conn->keepalives_count);
 
-    if (conn->gpqeid)			/* CDB */
-        free(conn->gpqeid);
-    if (conn->qe_version)		/* CDB */
-        free(conn->qe_version);
+	if (conn->gpqeid)			/* CDB */
+		free(conn->gpqeid);
+	if (conn->qe_version)		/* CDB */
+		free(conn->qe_version);
 
 	/* Note that conn->Pfdebug is not ours to close or free */
 	if (conn->last_query)

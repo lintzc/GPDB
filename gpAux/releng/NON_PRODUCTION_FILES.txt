@@ -1,9 +1,5 @@
 bin/UPDATE_INFO
-bin/dbgen
-bin/diskqual.ksh
-bin/dists.dss
 bin/explain.pl
-bin/generate_load_tpch.pl
 bin/gp
 bin/gpaddmirrors.py
 bin/gpdbupgrade
@@ -22,7 +18,5 @@ bin/pgbench
 bin/postgresql_conf_gp_additions
 bin/run_operator_tests.pl
 bin/test_fsync
-bin/gp_filedump
-docs/contrib/README.gp_filedump
 lib/python/gppylib/programs/clsInjectFault.py
 

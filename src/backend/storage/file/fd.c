@@ -907,15 +907,14 @@ FileNameOpenFile(FileName fileName, int fileFlags, int fileMode)
 	return fd;
 }
 
-/* GPDB_83_MERGE_FIXME: Commit acfce502 changed things so that PostgreSQL
+/* Commit acfce502 changed things so that PostgreSQL
  * no longer stores temporary files in the database directories, but in
- * $PGDATA/pgsql_tmp, or within a tablespace's pgsql_tmp dir. But
- * GPDB also has a concept of "temp filespaces", and there's something
- * funny going on with mirroring, as we used "getCurrentTempFilePath"
- * (which is a macro!) instead of straight DatabasePath in GPDB.
+ * $PGDATA/pgsql_tmp, or within a tablespace's pgsql_tmp dir.
  *
- * So I just left this code as it was, i.e. I didn't merge the upstream
- * changes. This will need to be investigated.
+ * GPDB also has a concept of "temp filespace", and GPDB used
+ * "getCurrentTempFilePath" instead of DatabasePath.
+ *
+ * So this upstream commit is not merged.
  */
 /*
  * Open a temporary file that will (optionally) disappear when we close it.
@@ -1001,10 +1000,16 @@ OpenNamedFile(const char   *fileName,
 	char		tempfilepath[MAXPGPATH];
 	File		file;
 	int			fileFlags;
+	size_t		len;
 
 	ResourceOwnerEnlargeFiles(CurrentResourceOwner);
 
-	strncpy(tempfilepath, fileName, sizeof(tempfilepath));
+	len = strlcpy(tempfilepath, fileName, sizeof(tempfilepath));
+	if (len >= sizeof(tempfilepath))
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				errmsg("requested filename too long, %lu characters, max is %d",
+				len, MAXPGPATH)));
 
 	/*
 	 * Open the file.  Note: we don't use O_EXCL, in case there is an orphaned

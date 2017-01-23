@@ -14,7 +14,6 @@ from gppylib.mainUtils import gp
 from gppylib import pgconf
 from optparse import Values
 from pygresql import pg
-from gppylib.operations.utils import DEFAULT_NUM_WORKERS
 import gzip
 
 logger = gplog.get_default_logger()
@@ -292,7 +291,7 @@ def convert_report_filename_to_cdatabase_filename(context, report_file):
 
     ddboost_parent_dir = None
     if context.ddboost:
-        ddboost_parent_dir = context.get_backup_dir(directory='')
+        ddboost_parent_dir = context.get_backup_dir(timestamp=timestamp, directory='')
     return context.generate_filename("cdatabase", timestamp=timestamp, directory=ddboost_parent_dir)
 
 def get_lines_from_dd_file(filename, ddboost_storage_unit):
@@ -478,6 +477,9 @@ def execute_sql(query, master_port, dbname):
     conn = dbconn.connect(dburl)
     cursor = execSQL(conn, query)
     return cursor.fetchall()
+
+def execute_sql_with_connection(query, conn):
+    return execSQL(conn, query).fetchall()
 
 def generate_master_status_prefix(dump_prefix):
     return '%sgp_dump_status_1_1_' % (dump_prefix)

@@ -151,17 +151,17 @@ bool ExecEvalExprCodegen::GenerateExecEvalExpr(
   irb->SetInsertPoint(llvm_entry_block);
 
 #ifdef CODEGEN_DEBUG
-  codegen_utils->CreateElog(
-      DEBUG1,
-      "Codegen'ed expression evaluation called!");
+  EXPAND_CREATE_ELOG(codegen_utils,
+                     DEBUG1,
+                     "Codegen'ed expression evaluation called!");
 #endif
 
   // Generate code from expression tree generator
   llvm::Value* value = nullptr;
   bool is_generated = expr_tree_generator_->GenerateCode(codegen_utils,
                                                         gen_info_,
-                                                        llvm_isnull_arg,
-                                                        &value);
+                                                        &value,
+                                                        llvm_isnull_arg);
   if (!is_generated ||
       nullptr == value) {
     return false;

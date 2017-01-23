@@ -152,6 +152,7 @@ add_library(gpcodegen SHARED
             expr_tree_generator.cc
             op_expr_tree_generator.cc
             pg_date_func_generator.cc
+            pg_numeric_func_generator.cc
             var_expr_tree_generator.cc
             advance_aggregates_codegen.cc
 
@@ -206,9 +207,9 @@ macro(CHECK_SYMBOL_DEFINED LIBRARY CSYMBOL LIBPATH VARIABLE)
                   RESULT_VARIABLE RETURN_CODE
                   OUTPUT_QUIET)
   if(${RETURN_CODE} EQUAL 0) # One or more lines were selected
-		set(VARIABLE true)
+		set(${VARIABLE} true)
   elseif(${RETURN_CODE} EQUAL 1) # No lines were selected.
-		set(VARIABLE false)
+		set(${VARIABLE} false)
 	else()
 		message(FATAL_ERROR "Attempted to determine it ${CSYMBOL} is defined in ${LIBLOCATION} "
 					  "but the execution failed. Return code = ${RETURN_CODE}")
@@ -266,7 +267,7 @@ add_custom_target(unittest-check
 )
 
 # Googletest framework for tests.
-SET(GTEST_DIR ../../../gpAux/extensions/gtest)
+SET(GTEST_DIR ../../../gpAux/extensions/googletest/googletest)
 add_subdirectory(${GTEST_DIR} ${CMAKE_BINARY_DIR}/gtest EXCLUDE_FROM_ALL)
 enable_testing()
 
@@ -313,7 +314,7 @@ function(add_cmockery_gtest TEST_NAME TEST_SOURCES)
     )
     target_include_directories(${TEST_NAME} PUBLIC ${TEST_LIB_INC_DIRECTORIES})
     # Bring these from $ENV{LIBS}
-    target_link_libraries(${TEST_NAME} "-lnetsnmp -lpam -lxml2 -lpgport -lbz2 -lrt -lz -lreadline -lcrypt -ldl -lm -lcurl -L../../port -lpgport_srv" gpcodegen gtest)
+    target_link_libraries(${TEST_NAME} "-ldl -lnetsnmp -lpam -lxml2 -lpgport -lbz2 -lrt -lssl -lcrypto -lkrb5 -lcom_err -lgssapi_krb5 -lz -lldap -lreadline -lcrypt -lm -lcurl -L${CMAKE_INSTALL_PREFIX}/lib -L../../port -lpgport_srv" gpcodegen gtest)
     add_test(${TEST_NAME} ${TEST_NAME})
     add_dependencies(check ${TEST_NAME})
 endfunction(add_cmockery_gtest)
@@ -378,6 +379,9 @@ if(EXISTS ${TXT_OBJFILE})
     )
     add_cmockery_gtest(codegen_utils_unittest.t
         tests/codegen_utils_unittest.cc
+    )
+    add_cmockery_gtest(gp_codegen_utils_unittest.t
+        tests/gp_codegen_utils_unittest.cc
     )
 endif()
 

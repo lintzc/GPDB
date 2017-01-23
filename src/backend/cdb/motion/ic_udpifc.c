@@ -1,5 +1,5 @@
 /*-------------------------------------------------------------------------
- * ic_udp.c
+ * ic_udpifc.c
  *	   Interconnect code specific to UDP transport.
  *
  * Copyright (c) 2005-2011, Greenplum Inc.
@@ -33,6 +33,7 @@
 #include "utils/gp_atomic.h"
 #include "utils/builtins.h"
 #include "utils/debugbreak.h"
+#include "utils/faultinjector.h"
 #include "utils/pg_crc.h"
 #include "port/pg_crc32c.h"
 
@@ -1245,7 +1246,10 @@ setupUDPListeningSocket(int *listenerSocketFd, uint16 *listenerPort, int *txFami
 		if (!pg_set_noblock(fd))
 		{
 			if (fd >= 0)
+			{
 				closesocket(fd);
+				fd = -1;
+			}
 			continue;
 		}
 
@@ -1258,7 +1262,10 @@ setupUDPListeningSocket(int *listenerSocketFd, uint16 *listenerPort, int *txFami
 		}
 
 		if (fd >= 0)
+		{
 			closesocket(fd);
+			fd = -1;
+		}
 	}
 
 	if (rp == NULL)
@@ -1720,7 +1727,7 @@ destroyConnHashTable(ConnHashTable *ht)
 			if (ht->cxt)
 				pfree(trash);
 			else
-				free(ht->table);
+				free(trash);
 		}
 	}
 
@@ -1728,6 +1735,9 @@ destroyConnHashTable(ConnHashTable *ht)
 		pfree(ht->table);
 	else
 		free(ht->table);
+
+	ht->table = NULL;
+	ht->size = 0;
 }
 
 /*
@@ -1879,7 +1889,7 @@ sendStatusQueryMessage(MotionConn *conn, int fd, uint32 seq)
  * putRxBufferAndSendAck
  * 		Return a buffer and send an acknowledgment.
  *
- *  SHOULD BE CALLED WITH rx_control_info.lock *LOCKED*
+ *  SHOULD BE CALLED WITH ic_control_info.lock *LOCKED*
  */
 static void
 putRxBufferAndSendAck(MotionConn *conn, AckSendParam *param)
@@ -1968,7 +1978,7 @@ MlPutRxBufferIFC(ChunkTransportState *transportStates, int motNodeID, int route)
  * getRxBuffer
  * 		Get a receive buffer.
  *
- * SHOULD BE CALLED WITH rx_control_info.lock *LOCKED*
+ * SHOULD BE CALLED WITH ic_control_info.lock *LOCKED*
  *
  * NOTE: This function MUST NOT contain elog or ereport statements.
  * elog is NOT thread-safe.  Developers should instead use something like:
@@ -2027,7 +2037,7 @@ getRxBuffer(RxBufferPool *p)
  * putRxBufferToFreeList
  * 		Return a receive buffer to free list
  *
- *  SHOULD BE CALLED WITH rx_control_info.lock *LOCKED*
+ *  SHOULD BE CALLED WITH ic_control_info.lock *LOCKED*
  */
 static inline void
 putRxBufferToFreeList(RxBufferPool *p, icpkthdr *buf)
@@ -2041,7 +2051,7 @@ putRxBufferToFreeList(RxBufferPool *p, icpkthdr *buf)
  * getRxBufferFromFreeList
  * 		Get a receive buffer from free list
  *
- * SHOULD BE CALLED WITH rx_control_info.lock *LOCKED*
+ * SHOULD BE CALLED WITH ic_control_info.lock *LOCKED*
  *
  * NOTE: This function MUST NOT contain elog or ereport statements.
  * elog is NOT thread-safe.  Developers should instead use something like:
@@ -3603,7 +3613,7 @@ TeardownUDPIFCInterconnect(ChunkTransportState *transportStates,
  * prepareRxConnForRead
  * 		Prepare the receive connection for reading.
  *
- * MUST BE CALLED WITH rx_control_info.lock LOCKED.
+ * MUST BE CALLED WITH ic_control_info.lock LOCKED.
  */
 static void
 prepareRxConnForRead(MotionConn *conn)
@@ -3622,7 +3632,7 @@ prepareRxConnForRead(MotionConn *conn)
  * receiveChunksUDPIFC
  * 		Receive chunks from the senders
  *
- * MUST BE CALLED WITH rx_control_info.lock LOCKED.
+ * MUST BE CALLED WITH ic_control_info.lock LOCKED.
  */
 static TupleChunkListItem
 receiveChunksUDPIFC(ChunkTransportState *pTransportStates, ChunkTransportStateEntry *pEntry,
@@ -3794,7 +3804,7 @@ RecvTupleChunkFromAnyUDPIFC_Internal(MotionLayerState *mlStates,
 		return NULL;
 	}
 
-	/* receiveChunksUDPIFC() releases rx_control_info.lock as a side-effect */
+	/* receiveChunksUDPIFC() releases ic_control_info.lock as a side-effect */
 	tcItem = receiveChunksUDPIFC(transportStates, pEntry, motNodeID, srcRoute, NULL, transportStates->teardownActive);
 
 	pEntry->scanStart = *srcRoute + 1;
@@ -4426,6 +4436,21 @@ xmit_retry:
 
 		if (errno == EAGAIN) /* no space ? not an error. */
 			return;
+
+		/*
+		 * If Linux iptables (nf_conntrack?) drops an outgoing packet, it may
+		 * return an EPERM to the application. This might be simply because
+		 * of traffic shaping or congestion, so ignore it.
+		 */
+		if (errno == EPERM)
+		{
+			ereport(LOG,
+					(errcode(ERRCODE_GP_INTERCONNECTION_ERROR),
+					 errmsg("Interconnect error writing an outgoing packet: %m"),
+					 errdetail("error during sendto() for Remote Connection: contentId=%d at %s",
+							   conn->remoteContentId, conn->remoteHostAndPort)));
+			return;
+		}
 
 		ereport(ERROR, (errcode(ERRCODE_GP_INTERCONNECTION_ERROR),
 						errmsg("Interconnect error writing an outgoing packet: %m"),
@@ -5455,6 +5480,18 @@ doSendStopMessageUDPIFC(ChunkTransportState *transportStates, int16 motNodeID)
 				 * We will skip sending ACKs to those connections.
 				 */
 
+#ifdef FAULT_INJECTOR
+				if (FaultInjector_InjectFaultIfSet(
+												   InterconnectStopAckIsLost,
+												   DDLNotSpecified,
+												   "" /* databaseName */,
+												   "" /* tableName */) == FaultInjectorTypeSkip)
+				{
+					pthread_mutex_unlock(&ic_control_info.lock);
+					continue;
+				}
+#endif
+
 				if (conn->peer.ss_family == AF_INET || conn->peer.ss_family == AF_INET6)
 				{
 					uint32 seq = conn->conn_info.seq > 0 ? conn->conn_info.seq - 1 : 0;
@@ -5696,7 +5733,9 @@ handleDataPacket(MotionConn *conn, icpkthdr *pkt, struct sockaddr_storage *peer,
 	#ifdef AMS_VERBOSE_LOGGING
 		logPkt("STATUS QUERY MESSAGE", pkt);
 	#endif
-		setAckSendParam(param, conn, UDPIC_FLAGS_CAPACITY | UDPIC_FLAGS_ACK | conn->conn_info.flags, conn->conn_info.seq - 1, conn->conn_info.extraSeq);
+		uint32 seq = conn->conn_info.seq > 0 ? conn->conn_info.seq - 1 : 0;
+		uint32 extraSeq = conn->stopRequested ? seq : conn->conn_info.extraSeq;
+		setAckSendParam(param, conn, UDPIC_FLAGS_CAPACITY | UDPIC_FLAGS_ACK | conn->conn_info.flags, seq, extraSeq);
 
 		return false;
 	}
@@ -6143,7 +6182,7 @@ rxThreadFunc(void *arg)
 		/* pthread_yield(); */
 	}
 
-	/* Before retrun, we release the packet. */
+	/* Before return, we release the packet. */
 	if (pkt)
 	{
 		pthread_mutex_lock(&ic_control_info.lock);

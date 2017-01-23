@@ -25,14 +25,13 @@ import unittest2 as unittest
 import os
 import subprocess
 import sys
-from time import sleep
 
-@unittest.skipIf(os.environ.get('BUILD_TYPE') == 'gcov', "Skip for Instrumented Build")
+base_dir = os.path.dirname(os.path.realpath(__file__))
+gpdiff_init_file = os.path.join(base_dir, "sql", "init_file")
 
 class UAO_FaultInjection_TestCase(MPPTestCase):
-
+    
     def get_sql_files(self, name):
-        base_dir = os.path.dirname(sys.modules[self.__class__.__module__].__file__)
         sql_file = os.path.join(
             base_dir, "sql", name + ".sql");    
         out_file = os.path.join(base_dir, 
@@ -56,15 +55,15 @@ class UAO_FaultInjection_TestCase(MPPTestCase):
         gpfaultinjector.run()
 
         PSQL.run_sql_file(sql_file1, out_file=out_file1)
-        result1 = Gpdiff.are_files_equal(out_file1, ans_file1)
+        result1 = Gpdiff.are_files_equal(out_file1, ans_file1, match_sub=[gpdiff_init_file])
 
         gpfaultinjector = Command(cmd_type, set_fault_in_seg_reset)
         gpfaultinjector.run()
 
         PSQL.run_sql_file(sql_file2, out_file=out_file2)
-        result2 = Gpdiff.are_files_equal(out_file2, ans_file2)
+        result2 = Gpdiff.are_files_equal(out_file2, ans_file2, match_sub=[gpdiff_init_file])
 
-        self.assertTrue(result1)        
+        self.assertTrue(result1)
         self.assertTrue(result2)
 
     def test_uao_crash_compaction_before_cleanup_phase_master(self):
@@ -83,17 +82,17 @@ class UAO_FaultInjection_TestCase(MPPTestCase):
         gpfaultinjector.run()
 
         PSQL.run_sql_file(sql_file1, out_file=out_file1)
-        result1 = Gpdiff.are_files_equal(out_file1, ans_file1)
-    
-        # The connection is accepted before it is actually ready, leading to panic messages
-        # Therefore we have to sleep here.
-        sleep(5)
+        result1 = Gpdiff.are_files_equal(out_file1, ans_file1, match_sub=[gpdiff_init_file])
+
+        PSQL.wait_for_database_up();
 
         gpfaultinjector = Command(cmd_type, set_fault_in_master_reset)
         gpfaultinjector.run()
 
         PSQL.run_sql_file(sql_file2, out_file=out_file2)
-        result2 = Gpdiff.are_files_equal(out_file2, ans_file2)
+        result2 = Gpdiff.are_files_equal(out_file2, ans_file2, match_sub=[gpdiff_init_file])
+
+        self.assertTrue(result1)
         self.assertTrue(result2)
 
     def test_uao_crash_compaction_before_cleanup_phase_master_with_aocs(self):
@@ -113,16 +112,17 @@ class UAO_FaultInjection_TestCase(MPPTestCase):
 
         PSQL.run_sql_file(sql_file1, out_file=out_file1)
     
-        result1 = Gpdiff.are_files_equal(out_file1, ans_file1)
-        # The connection is accepted before it is actually ready, leading to panic messages
-        # Therefore we have to sleep here.
-        sleep(5)
+        result1 = Gpdiff.are_files_equal(out_file1, ans_file1, match_sub=[gpdiff_init_file])
+
+        PSQL.wait_for_database_up();
 
         gpfaultinjector = Command(cmd_type, set_fault_in_master_reset)
         gpfaultinjector.run()
 
         PSQL.run_sql_file(sql_file2, out_file=out_file2)
-        result2 = Gpdiff.are_files_equal(out_file2, ans_file2)
+        result2 = Gpdiff.are_files_equal(out_file2, ans_file2, match_sub=[gpdiff_init_file])
+
+        self.assertTrue(result1)
         self.assertTrue(result2)
 
     def test_uao_crash_compaction_before_cleanup_phase_master_with_ao(self):
@@ -142,16 +142,17 @@ class UAO_FaultInjection_TestCase(MPPTestCase):
 
         PSQL.run_sql_file(sql_file1, out_file=out_file1)
     
-        result1 = Gpdiff.are_files_equal(out_file1, ans_file1)
-        # The connection is accepted before it is actually ready, leading to panic messages
-        # Therefore we have to sleep here.
-        sleep(5)
+        result1 = Gpdiff.are_files_equal(out_file1, ans_file1, match_sub=[gpdiff_init_file])
+
+        PSQL.wait_for_database_up();
 
         gpfaultinjector = Command(cmd_type, set_fault_in_master_reset)
         gpfaultinjector.run()
 
         PSQL.run_sql_file(sql_file2, out_file=out_file2)
-        result2 = Gpdiff.are_files_equal(out_file2, ans_file2)
+        result2 = Gpdiff.are_files_equal(out_file2, ans_file2, match_sub=[gpdiff_init_file])
+
+        self.assertTrue(result1)
         self.assertTrue(result2)
 
     def test_uao_crash_compaction_before_cleanup_phase_segment_with_ao(self):
@@ -171,16 +172,17 @@ class UAO_FaultInjection_TestCase(MPPTestCase):
 
         PSQL.run_sql_file(sql_file1, out_file=out_file1)
     
-        result1 = Gpdiff.are_files_equal(out_file1, ans_file1)
-        # The connection is accepted before it is actually ready, leading to panic messages
-        # Therefore we have to sleep here.
-        sleep(5)
+        result1 = Gpdiff.are_files_equal(out_file1, ans_file1, match_sub=[gpdiff_init_file])
+
+        PSQL.wait_for_database_up();
 
         gpfaultinjector = Command(cmd_type, set_fault_in_seg_reset)
         gpfaultinjector.run()
 
         PSQL.run_sql_file(sql_file2, out_file=out_file2)
-        result2 = Gpdiff.are_files_equal(out_file2, ans_file2)
+        result2 = Gpdiff.are_files_equal(out_file2, ans_file2, match_sub=[gpdiff_init_file])
+
+        self.assertTrue(result1)
         self.assertTrue(result2)
 
     def test_uao_crash_compaction_before_cleanup_phase_segment_with_aocs(self):
@@ -200,16 +202,17 @@ class UAO_FaultInjection_TestCase(MPPTestCase):
 
         PSQL.run_sql_file(sql_file1, out_file=out_file1)
     
-        result1 = Gpdiff.are_files_equal(out_file1, ans_file1)
-        # The connection is accepted before it is actually ready, leading to panic messages
-        # Therefore we have to sleep here.
-        sleep(5)
+        result1 = Gpdiff.are_files_equal(out_file1, ans_file1, match_sub=[gpdiff_init_file])
+
+        PSQL.wait_for_database_up();
 
         gpfaultinjector = Command(cmd_type, set_fault_in_seg_reset)
         gpfaultinjector.run()
 
         PSQL.run_sql_file(sql_file2, out_file=out_file2)
-        result2 = Gpdiff.are_files_equal(out_file2, ans_file2)
+        result2 = Gpdiff.are_files_equal(out_file2, ans_file2, match_sub=[gpdiff_init_file])
+
+        self.assertTrue(result1)
         self.assertTrue(result2)
 
     def test_uao_crash_compaction_before_drop(self):
@@ -227,13 +230,13 @@ class UAO_FaultInjection_TestCase(MPPTestCase):
         gpfaultinjector.run()
 
         PSQL.run_sql_file(sql_file1, out_file=out_file1)
-        result1 = Gpdiff.are_files_equal(out_file1, ans_file1)
+        result1 = Gpdiff.are_files_equal(out_file1, ans_file1, match_sub=[gpdiff_init_file])
 
         gpfaultinjector = Command(cmd_type, set_fault_in_seg_reset)
         gpfaultinjector.run()
 
         PSQL.run_sql_file(sql_file2, out_file=out_file2)
-        result2 = Gpdiff.are_files_equal(out_file2, ans_file2)
+        result2 = Gpdiff.are_files_equal(out_file2, ans_file2, match_sub=[gpdiff_init_file])
 
         self.assertTrue(result1)        
         self.assertTrue(result2)
@@ -254,17 +257,17 @@ class UAO_FaultInjection_TestCase(MPPTestCase):
         gpfaultinjector.run()
 
         PSQL.run_sql_file(sql_file1, out_file=out_file1)
-        result1 = Gpdiff.are_files_equal(out_file1, ans_file1)
-    
-        # The connection is accepted before it is actually ready, leading to panic messages
-        # Therefore we have to sleep here.
-        sleep(5)
+        result1 = Gpdiff.are_files_equal(out_file1, ans_file1, match_sub=[gpdiff_init_file])
+
+        PSQL.wait_for_database_up();
 
         gpfaultinjector = Command(cmd_type, set_fault_in_master_reset)
         gpfaultinjector.run()
 
         PSQL.run_sql_file(sql_file2, out_file=out_file2)
-        result2 = Gpdiff.are_files_equal(out_file2, ans_file2)
+        result2 = Gpdiff.are_files_equal(out_file2, ans_file2, match_sub=[gpdiff_init_file])
+
+        self.assertTrue(result1)
         self.assertTrue(result2)
 
     def test_uao_crash_compaction_before_drop_master_with_aocs(self):
@@ -284,16 +287,17 @@ class UAO_FaultInjection_TestCase(MPPTestCase):
 
         PSQL.run_sql_file(sql_file1, out_file=out_file1)
     
-        result1 = Gpdiff.are_files_equal(out_file1, ans_file1)
-        # The connection is accepted before it is actually ready, leading to panic messages
-        # Therefore we have to sleep here.
-        sleep(5)
+        result1 = Gpdiff.are_files_equal(out_file1, ans_file1, match_sub=[gpdiff_init_file])
+
+        PSQL.wait_for_database_up();
 
         gpfaultinjector = Command(cmd_type, set_fault_in_master_reset)
         gpfaultinjector.run()
 
         PSQL.run_sql_file(sql_file2, out_file=out_file2)
-        result2 = Gpdiff.are_files_equal(out_file2, ans_file2)
+        result2 = Gpdiff.are_files_equal(out_file2, ans_file2, match_sub=[gpdiff_init_file])
+
+        self.assertTrue(result1)
         self.assertTrue(result2)
 
     def test_uao_crash_compaction_before_drop_master_with_ao(self):
@@ -313,16 +317,17 @@ class UAO_FaultInjection_TestCase(MPPTestCase):
 
         PSQL.run_sql_file(sql_file1, out_file=out_file1)
     
-        result1 = Gpdiff.are_files_equal(out_file1, ans_file1)
-        # The connection is accepted before it is actually ready, leading to panic messages
-        # Therefore we have to sleep here.
-        sleep(5)
+        result1 = Gpdiff.are_files_equal(out_file1, ans_file1, match_sub=[gpdiff_init_file])
+
+        PSQL.wait_for_database_up();
 
         gpfaultinjector = Command(cmd_type, set_fault_in_master_reset)
         gpfaultinjector.run()
 
         PSQL.run_sql_file(sql_file2, out_file=out_file2)
-        result2 = Gpdiff.are_files_equal(out_file2, ans_file2)
+        result2 = Gpdiff.are_files_equal(out_file2, ans_file2, match_sub=[gpdiff_init_file])
+
+        self.assertTrue(result1)
         self.assertTrue(result2)
 
     def test_uao_crash_compaction_before_drop_segment_with_ao(self):
@@ -342,16 +347,17 @@ class UAO_FaultInjection_TestCase(MPPTestCase):
 
         PSQL.run_sql_file(sql_file1, out_file=out_file1)
     
-        result1 = Gpdiff.are_files_equal(out_file1, ans_file1)
-        # The connection is accepted before it is actually ready, leading to panic messages
-        # Therefore we have to sleep here.
-        sleep(5)
+        result1 = Gpdiff.are_files_equal(out_file1, ans_file1, match_sub=[gpdiff_init_file])
+
+        PSQL.wait_for_database_up();
 
         gpfaultinjector = Command(cmd_type, set_fault_in_seg_reset)
         gpfaultinjector.run()
 
         PSQL.run_sql_file(sql_file2, out_file=out_file2)
-        result2 = Gpdiff.are_files_equal(out_file2, ans_file2)
+        result2 = Gpdiff.are_files_equal(out_file2, ans_file2, match_sub=[gpdiff_init_file])
+
+        self.assertTrue(result1)
         self.assertTrue(result2)
 
     def test_uao_crash_compaction_before_drop_segment_with_aocs(self):
@@ -371,16 +377,17 @@ class UAO_FaultInjection_TestCase(MPPTestCase):
 
         PSQL.run_sql_file(sql_file1, out_file=out_file1)
     
-        result1 = Gpdiff.are_files_equal(out_file1, ans_file1)
-        # The connection is accepted before it is actually ready, leading to panic messages
-        # Therefore we have to sleep here.
-        sleep(5)
+        result1 = Gpdiff.are_files_equal(out_file1, ans_file1, match_sub=[gpdiff_init_file])
+
+        PSQL.wait_for_database_up();
 
         gpfaultinjector = Command(cmd_type, set_fault_in_seg_reset)
         gpfaultinjector.run()
 
         PSQL.run_sql_file(sql_file2, out_file=out_file2)
-        result2 = Gpdiff.are_files_equal(out_file2, ans_file2)
+        result2 = Gpdiff.are_files_equal(out_file2, ans_file2, match_sub=[gpdiff_init_file])
+
+        self.assertTrue(result1)
         self.assertTrue(result2)
 
     def test_uao_crash_compaction_vacuum(self):
@@ -400,16 +407,17 @@ class UAO_FaultInjection_TestCase(MPPTestCase):
 
         PSQL.run_sql_file(sql_file1, out_file=out_file1)
     
-        result1 = Gpdiff.are_files_equal(out_file1, ans_file1)
-        # The connection is accepted before it is actually ready, leading to panic messages
-        # Therefore we have to sleep here.
-        sleep(5)
+        result1 = Gpdiff.are_files_equal(out_file1, ans_file1, match_sub=[gpdiff_init_file])
+
+        PSQL.wait_for_database_up();
 
         gpfaultinjector = Command(cmd_type, set_fault_in_seg_reset)
         gpfaultinjector.run()
 
         PSQL.run_sql_file(sql_file2, out_file=out_file2)
-        result2 = Gpdiff.are_files_equal(out_file2, ans_file2)
+        result2 = Gpdiff.are_files_equal(out_file2, ans_file2, match_sub=[gpdiff_init_file])
+
+        self.assertTrue(result1)
         self.assertTrue(result2)
 
     def test_uao_crash_delete(self):
@@ -429,16 +437,17 @@ class UAO_FaultInjection_TestCase(MPPTestCase):
 
         PSQL.run_sql_file(sql_file1, out_file=out_file1)
     
-        result1 = Gpdiff.are_files_equal(out_file1, ans_file1)
-        # The connection is accepted before it is actually ready, leading to panic messages
-        # Therefore we have to sleep here.
-        sleep(5)
+        result1 = Gpdiff.are_files_equal(out_file1, ans_file1, match_sub=[gpdiff_init_file])
+
+        PSQL.wait_for_database_up();
 
         gpfaultinjector = Command(cmd_type, set_fault_in_seg_reset)
         gpfaultinjector.run()
 
         PSQL.run_sql_file(sql_file2, out_file=out_file2)
-        result2 = Gpdiff.are_files_equal(out_file2, ans_file2)
+        result2 = Gpdiff.are_files_equal(out_file2, ans_file2, match_sub=[gpdiff_init_file])
+
+        self.assertTrue(result1)
         self.assertTrue(result2)
 
     def test_uao_crash_insert(self):
@@ -458,16 +467,17 @@ class UAO_FaultInjection_TestCase(MPPTestCase):
 
         PSQL.run_sql_file(sql_file1, out_file=out_file1)
     
-        result1 = Gpdiff.are_files_equal(out_file1, ans_file1)
-        # The connection is accepted before it is actually ready, leading to panic messages
-        # Therefore we have to sleep here.
-        sleep(5)
+        result1 = Gpdiff.are_files_equal(out_file1, ans_file1, match_sub=[gpdiff_init_file])
+
+        PSQL.wait_for_database_up();
 
         gpfaultinjector = Command(cmd_type, set_fault_in_seg_reset)
         gpfaultinjector.run()
 
         PSQL.run_sql_file(sql_file2, out_file=out_file2)
-        result2 = Gpdiff.are_files_equal(out_file2, ans_file2)
+        result2 = Gpdiff.are_files_equal(out_file2, ans_file2, match_sub=[gpdiff_init_file])
+
+        self.assertTrue(result1)
         self.assertTrue(result2)
 
     def test_uao_crash_update(self):
@@ -487,16 +497,17 @@ class UAO_FaultInjection_TestCase(MPPTestCase):
 
         PSQL.run_sql_file(sql_file1, out_file=out_file1)
     
-        result1 = Gpdiff.are_files_equal(out_file1, ans_file1)
-        # The connection is accepted before it is actually ready, leading to panic messages
-        # Therefore we have to sleep here.
-        sleep(5)
+        result1 = Gpdiff.are_files_equal(out_file1, ans_file1, match_sub=[gpdiff_init_file])
+
+        PSQL.wait_for_database_up();
 
         gpfaultinjector = Command(cmd_type, set_fault_in_seg_reset)
         gpfaultinjector.run()
 
         PSQL.run_sql_file(sql_file2, out_file=out_file2)
-        result2 = Gpdiff.are_files_equal(out_file2, ans_file2)
+        result2 = Gpdiff.are_files_equal(out_file2, ans_file2, match_sub=[gpdiff_init_file])
+
+        self.assertTrue(result1)
         self.assertTrue(result2)
 
     def test_uaocs_crash_delete(self):
@@ -516,16 +527,17 @@ class UAO_FaultInjection_TestCase(MPPTestCase):
 
         PSQL.run_sql_file(sql_file1, out_file=out_file1)
     
-        result1 = Gpdiff.are_files_equal(out_file1, ans_file1)
-        # The connection is accepted before it is actually ready, leading to panic messages
-        # Therefore we have to sleep here.
-        sleep(5)
+        result1 = Gpdiff.are_files_equal(out_file1, ans_file1, match_sub=[gpdiff_init_file])
+
+        PSQL.wait_for_database_up();
 
         gpfaultinjector = Command(cmd_type, set_fault_in_seg_reset)
         gpfaultinjector.run()
 
         PSQL.run_sql_file(sql_file2, out_file=out_file2)
-        result2 = Gpdiff.are_files_equal(out_file2, ans_file2)
+        result2 = Gpdiff.are_files_equal(out_file2, ans_file2, match_sub=[gpdiff_init_file])
+
+        self.assertTrue(result1)
         self.assertTrue(result2)
 
     def test_uaocs_crash_insert(self):
@@ -545,16 +557,17 @@ class UAO_FaultInjection_TestCase(MPPTestCase):
 
         PSQL.run_sql_file(sql_file1, out_file=out_file1)
     
-        result1 = Gpdiff.are_files_equal(out_file1, ans_file1)
-        # The connection is accepted before it is actually ready, leading to panic messages
-        # Therefore we have to sleep here.
-        sleep(5)
+        result1 = Gpdiff.are_files_equal(out_file1, ans_file1, match_sub=[gpdiff_init_file])
+
+        PSQL.wait_for_database_up();
 
         gpfaultinjector = Command(cmd_type, set_fault_in_seg_reset)
         gpfaultinjector.run()
 
         PSQL.run_sql_file(sql_file2, out_file=out_file2)
-        result2 = Gpdiff.are_files_equal(out_file2, ans_file2)
+        result2 = Gpdiff.are_files_equal(out_file2, ans_file2, match_sub=[gpdiff_init_file])
+
+        self.assertTrue(result1)
         self.assertTrue(result2)
 
     def test_uaocs_crash_update(self):
@@ -574,16 +587,17 @@ class UAO_FaultInjection_TestCase(MPPTestCase):
 
         PSQL.run_sql_file(sql_file1, out_file=out_file1)
     
-        result1 = Gpdiff.are_files_equal(out_file1, ans_file1)
-        # The connection is accepted before it is actually ready, leading to panic messages
-        # Therefore we have to sleep here.
-        sleep(5)
+        result1 = Gpdiff.are_files_equal(out_file1, ans_file1, match_sub=[gpdiff_init_file])
+
+        PSQL.wait_for_database_up();
 
         gpfaultinjector = Command(cmd_type, set_fault_in_seg_reset)
         gpfaultinjector.run()
 
         PSQL.run_sql_file(sql_file2, out_file=out_file2)
-        result2 = Gpdiff.are_files_equal(out_file2, ans_file2)
+        result2 = Gpdiff.are_files_equal(out_file2, ans_file2, match_sub=[gpdiff_init_file])
+
+        self.assertTrue(result1)
         self.assertTrue(result2)
 
     def test_uao_crash_update_in_tran(self):
@@ -603,16 +617,17 @@ class UAO_FaultInjection_TestCase(MPPTestCase):
 
         PSQL.run_sql_file(sql_file1, out_file=out_file1)
     
-        result1 = Gpdiff.are_files_equal(out_file1, ans_file1)
-        # The connection is accepted before it is actually ready, leading to panic messages
-        # Therefore we have to sleep here.
-        sleep(5)
+        result1 = Gpdiff.are_files_equal(out_file1, ans_file1, match_sub=[gpdiff_init_file])
+
+        PSQL.wait_for_database_up();
 
         gpfaultinjector = Command(cmd_type, set_fault_in_seg_reset)
         gpfaultinjector.run()
 
         PSQL.run_sql_file(sql_file2, out_file=out_file2)
-        result2 = Gpdiff.are_files_equal(out_file2, ans_file2)
+        result2 = Gpdiff.are_files_equal(out_file2, ans_file2, match_sub=[gpdiff_init_file])
+
+        self.assertTrue(result1)
         self.assertTrue(result2)
 
     def test_uaocs_crash_update_in_tran(self):
@@ -632,16 +647,17 @@ class UAO_FaultInjection_TestCase(MPPTestCase):
 
         PSQL.run_sql_file(sql_file1, out_file=out_file1)
     
-        result1 = Gpdiff.are_files_equal(out_file1, ans_file1)
-        # The connection is accepted before it is actually ready, leading to panic messages
-        # Therefore we have to sleep here.
-        sleep(5)
+        result1 = Gpdiff.are_files_equal(out_file1, ans_file1, match_sub=[gpdiff_init_file])
+
+        PSQL.wait_for_database_up();
 
         gpfaultinjector = Command(cmd_type, set_fault_in_seg_reset)
         gpfaultinjector.run()
 
         PSQL.run_sql_file(sql_file2, out_file=out_file2)
-        result2 = Gpdiff.are_files_equal(out_file2, ans_file2)
+        result2 = Gpdiff.are_files_equal(out_file2, ans_file2, match_sub=[gpdiff_init_file])
+
+        self.assertTrue(result1)
         self.assertTrue(result2)
 
     def test_uaocs_crash_truncate(self):
@@ -661,16 +677,17 @@ class UAO_FaultInjection_TestCase(MPPTestCase):
 
         PSQL.run_sql_file(sql_file1, out_file=out_file1)
     
-        result1 = Gpdiff.are_files_equal(out_file1, ans_file1)
-        # The connection is accepted before it is actually ready, leading to panic messages
-        # Therefore we have to sleep here.
-        sleep(5)
+        result1 = Gpdiff.are_files_equal(out_file1, ans_file1, match_sub=[gpdiff_init_file])
+
+        PSQL.wait_for_database_up();
 
         gpfaultinjector = Command(cmd_type, set_fault_in_seg_reset)
         gpfaultinjector.run()
 
         PSQL.run_sql_file(sql_file2, out_file=out_file2)
-        result2 = Gpdiff.are_files_equal(out_file2, ans_file2)
+        result2 = Gpdiff.are_files_equal(out_file2, ans_file2, match_sub=[gpdiff_init_file])
+
+        self.assertTrue(result1)
         self.assertTrue(result2)
 
     def test_uaocs_crash_alterdropcol(self):
@@ -690,21 +707,22 @@ class UAO_FaultInjection_TestCase(MPPTestCase):
 
         PSQL.run_sql_file(sql_file1, out_file=out_file1)
     
-        result1 = Gpdiff.are_files_equal(out_file1, ans_file1)
-        # The connection is accepted before it is actually ready, leading to panic messages
-        # Therefore we have to sleep here.
-        sleep(5)
+        result1 = Gpdiff.are_files_equal(out_file1, ans_file1, match_sub=[gpdiff_init_file])
+
+        PSQL.wait_for_database_up();
 
         gpfaultinjector = Command(cmd_type, set_fault_in_seg_reset)
         gpfaultinjector.run()
 
         PSQL.run_sql_file(sql_file2, out_file=out_file2)
-        result2 = Gpdiff.are_files_equal(out_file2, ans_file2)
+        result2 = Gpdiff.are_files_equal(out_file2, ans_file2, match_sub=[gpdiff_init_file])
+
+        self.assertTrue(result1)
         self.assertTrue(result2)
 
     def test_uaocs_crash_update_with_ins_fault(self):
         setup_file = self.get_sql_files("uaocs_crash_update_setup")[0]
-        (sql_file1, out_file1,ans_file1) = self.get_sql_files("uaocs_crash_update1")
+        (sql_file1, out_file1,ans_file1) = self.get_sql_files("uaocs_crash_update_with_ins_fault1")
         (sql_file2, out_file2, ans_file2) = self.get_sql_files("uaocs_crash_update2")
         if not os.path.exists(os.path.dirname(out_file1)):
             os.mkdir(os.path.dirname(out_file1))
@@ -719,21 +737,22 @@ class UAO_FaultInjection_TestCase(MPPTestCase):
 
         PSQL.run_sql_file(sql_file1, out_file=out_file1)
     
-        result1 = Gpdiff.are_files_equal(out_file1, ans_file1)
-        # The connection is accepted before it is actually ready, leading to panic messages
-        # Therefore we have to sleep here.
-        sleep(5)
+        result1 = Gpdiff.are_files_equal(out_file1, ans_file1, match_sub=[gpdiff_init_file])
+
+        PSQL.wait_for_database_up();
 
         gpfaultinjector = Command(cmd_type, set_fault_in_seg_reset)
         gpfaultinjector.run()
 
         PSQL.run_sql_file(sql_file2, out_file=out_file2)
-        result2 = Gpdiff.are_files_equal(out_file2, ans_file2)
+        result2 = Gpdiff.are_files_equal(out_file2, ans_file2, match_sub=[gpdiff_init_file])
+
+        self.assertTrue(result1)
         self.assertTrue(result2)
 
     def test_uao_crash_update_with_ins_fault(self):
         setup_file = self.get_sql_files("uaocs_crash_update_setup")[0]
-        (sql_file1, out_file1,ans_file1) = self.get_sql_files("uao_crash_update1")
+        (sql_file1, out_file1,ans_file1) = self.get_sql_files("uao_crash_update_with_ins_fault1")
         (sql_file2, out_file2, ans_file2) = self.get_sql_files("uao_crash_update2")
         if not os.path.exists(os.path.dirname(out_file1)):
             os.mkdir(os.path.dirname(out_file1))
@@ -748,16 +767,17 @@ class UAO_FaultInjection_TestCase(MPPTestCase):
 
         PSQL.run_sql_file(sql_file1, out_file=out_file1)
     
-        result1 = Gpdiff.are_files_equal(out_file1, ans_file1)
-        # The connection is accepted before it is actually ready, leading to panic messages
-        # Therefore we have to sleep here.
-        sleep(5)
+        result1 = Gpdiff.are_files_equal(out_file1, ans_file1, match_sub=[gpdiff_init_file])
+
+        PSQL.wait_for_database_up();
 
         gpfaultinjector = Command(cmd_type, set_fault_in_seg_reset)
         gpfaultinjector.run()
 
         PSQL.run_sql_file(sql_file2, out_file=out_file2)
-        result2 = Gpdiff.are_files_equal(out_file2, ans_file2)
+        result2 = Gpdiff.are_files_equal(out_file2, ans_file2, match_sub=[gpdiff_init_file])
+
+        self.assertTrue(result1)
         self.assertTrue(result2)
 
     def test_uao_crash_vacuum_with_ins_fault(self):
@@ -777,15 +797,15 @@ class UAO_FaultInjection_TestCase(MPPTestCase):
 
         PSQL.run_sql_file(sql_file1, out_file=out_file1)
     
-        result1 = Gpdiff.are_files_equal(out_file1, ans_file1)
-        # The connection is accepted before it is actually ready, leading to panic messages
-        # Therefore we have to sleep here.
-        sleep(5)
+        result1 = Gpdiff.are_files_equal(out_file1, ans_file1, match_sub=[gpdiff_init_file])
+
+        PSQL.wait_for_database_up();
 
         gpfaultinjector = Command(cmd_type, set_fault_in_seg_reset)
         gpfaultinjector.run()
 
         PSQL.run_sql_file(sql_file2, out_file=out_file2)
-        result2 = Gpdiff.are_files_equal(out_file2, ans_file2)
-        self.assertTrue(result2)
+        result2 = Gpdiff.are_files_equal(out_file2, ans_file2, match_sub=[gpdiff_init_file])
 
+        self.assertTrue(result1)
+        self.assertTrue(result2)

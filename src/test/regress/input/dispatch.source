@@ -36,6 +36,11 @@ DROP TABLE "my table";
 \c regression
 DROP DATABASE "dispatch test db";
 
+-- Test gp_max_plan_size limit
+set gp_max_plan_size='10 kB';
+create table dispatchtesttab(t text);
+select * from dispatchtesttab where t = repeat('x', 1024*11);
+
 --
 -- test QD will report failure if QE fails to send its motion_listener back
 -- during backend initialization
@@ -78,15 +83,12 @@ CREATE OR REPLACE FUNCTION cleanupAllGangs() RETURNS BOOL
 AS '@abs_builddir@/regress@DLSUFFIX@', 'cleanupAllGangs' LANGUAGE C;
 
 -- check if segments has backend running
-CREATE OR REPLACE FUNCTION numBackendsOnSegment() RETURNS INTEGER
-AS '@abs_builddir@/regress@DLSUFFIX@', 'numBackendsOnSegment' LANGUAGE C;
+CREATE OR REPLACE FUNCTION hasBackendsExist(int) RETURNS BOOL 
+AS '@abs_builddir@/regress@DLSUFFIX@', 'hasBackendsExist' LANGUAGE C;
 
 -- check if QD has reusable gangs
 CREATE OR REPLACE FUNCTION hasGangsExist() RETURNS BOOL
 AS '@abs_builddir@/regress@DLSUFFIX@', 'hasGangsExist' LANGUAGE C;
-
-CREATE VIEW v_hasBackendsOnSegment as select sum(numBackendsOnSegment()) > 0 from
-gp_dist_random('gp_id');
 
 -- disable debug linger to get immediate feedback from FATAL errors.
 set gp_debug_linger to 0;
@@ -98,10 +100,10 @@ set log_min_messages to DEBUG;
 -- Case 1.1
 -- A segment in recovery mode, writer gang retry gp_gang_creation_retry_count times and finally success
 
--- set maximun retry time to 60 seconds, this should be long enough for segment
+-- set maximum retry time to 120 seconds, this should be long enough for segment
 -- recovery back. otherwise it should be bug somewhere
 set gp_gang_creation_retry_count to 120;
-set gp_gang_creation_retry_timer to 500;
+set gp_gang_creation_retry_timer to 1000;
 
 select cleanupAllGangs();
 
@@ -152,7 +154,7 @@ select 'wait recovery finish' from gp_dist_random('gp_id');
 select cleanupAllGangs();
 
 -- expect no zombie backends left on segments 
-select * from v_hasBackendsOnSegment;
+select sum(case when hasBackendsExist(30)='t' then 1 else 0 end) > 0 as hasbackends from gp_dist_random('gp_id');
 
 -- should success 
 select * from dispatch_test_t1, dispatch_test_t2, dispatch_test_t3
@@ -173,8 +175,9 @@ where dispatch_test_t1.c2 = dispatch_test_t2.c2 and dispatch_test_t2.c3 = dispat
 
 -- expect no resuable gang exist
 select * from hasGangsExist();
+
 -- expect no zombie backends left on segments.
-select * from v_hasBackendsOnSegment;
+select sum(case when hasBackendsExist(30)='t' then 1 else 0 end) > 0 as hasbackends from gp_dist_random('gp_id');
 
 -- cleanupAllGangs();
 select cleanupAllGangs();
@@ -189,8 +192,9 @@ where dispatch_test_t1.c2 = dispatch_test_t2.c2 and dispatch_test_t2.c3 = dispat
 
 -- expect resuable gang exist
 select * from hasGangsExist();
+
 -- expect QEs exist.
-select * from v_hasBackendsOnSegment;
+select sum(case when hasBackendsExist(0)='t' then 1 else 0 end) > 0 as hasbackends from gp_dist_random('gp_id');
 
 \! gpfaultinjector -q -f send_qe_details_init_backend -y reset --seg_dbid 2
 
@@ -235,3 +239,12 @@ select * from dispatch_test_t1, dispatch_test_t2, dispatch_test_t3
 where dispatch_test_t1.c2 = dispatch_test_t2.c2 and dispatch_test_t2.c3 = dispatch_test_t3.c3;
 
 \! gpfaultinjector -q -f after_one_slice_dispatched -y reset --seg_dbid 1
+
+-- test logging of gang management
+SET gp_log_gang = 'debug';
+
+-- test INFO raised from segments with various kinds of fields
+CREATE OR REPLACE FUNCTION udf_raise_info() RETURNS BOOL
+AS '@abs_builddir@/regress@DLSUFFIX@', 'gangRaiseInfo' LANGUAGE C;
+
+SELECT udf_raise_info() FROM gp_dist_random('gp_id') WHERE gp_segment_id = 0;

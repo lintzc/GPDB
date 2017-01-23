@@ -55,15 +55,6 @@ typedef struct PersistentStoreSharedData
 
 	int64				inUseCount;
 		/* Current number of tuples in persistent table */
-
-	int64 				maxFreeOrderNum;
-		/* Current number of free tuples in persistent table */
-
-	ItemPointerData		freeTid;
-		/* TID of last tuple freed */
-
-	ItemPointerData		maxTid;
-		/* Highest TID of tuple stored in persistent table */
 } PersistentStoreSharedData;
 
 inline static bool PersistentStoreSharedData_EyecatcherIsValid(
@@ -107,7 +98,6 @@ typedef struct PersistentStoreData
 	int64			myHighestSerialNum;
 	int				numAttributes;
 	int				attNumPersistentSerialNum;
-	int				attNumPreviousFreeTid;
 } PersistentStoreData;
 
 typedef struct PersistentStoreScan
@@ -433,16 +423,7 @@ extern void PersistentStore_Init(
 	PersistentStoreScanKeyInitCallback  scanKeyInitCallback,
 	PersistentStoreAllowDuplicateCallback allowDuplicateCallback,
 	int 						numAttributes,
-	int 						attNumPersistentSerialNum,
-	int 						attNumPreviousFreeTid);
-
-extern void PersistentStore_ResetFreeList(
-	PersistentStoreData 		*storeData,
-	PersistentStoreSharedData 	*storeSharedData);
-
-extern uint64 PersistentStore_RebuildFreeList(
-	PersistentStoreData 		*storeData,
-	PersistentStoreSharedData 	*storeSharedData);
+	int 						attNumPersistentSerialNum);
 
 extern void PersistentStore_InitScanUnderLock(
 	PersistentStoreData 		*storeData,
@@ -495,11 +476,6 @@ typedef enum PersistentTidIsKnownResult
 	PersistentTidIsKnownResult_NotKnown,
 	MaxPersistentTidIsKnownResult		/* must always be last */
 } PersistentTidIsKnownResult;
-
-extern PersistentTidIsKnownResult PersistentStore_TidIsKnown(
-	PersistentStoreSharedData 	*storeSharedData,
-	ItemPointer 				persistentTid,
-	ItemPointer 				maxTid);
 
 extern void PersistentStore_UpdateTuple(
 	PersistentStoreData 		*storeData,

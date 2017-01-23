@@ -79,28 +79,7 @@ typedef struct IndexInfo
 	bool		ii_ReadyForInserts;
 	bool		ii_Concurrent;
 	bool		ii_BrokenHotChain;
-
-	/* Additional info needed by index creation.
-	 * Used for
-	 * (1) bitmap indexes to store oids that are needed for lov heap and lov index.
-	 * (2) append-only tables to store oids for their block directory relations
-	 *     and indexes
-	 */
-	void       *opaque;
-
 } IndexInfo;
-
-typedef struct IndexInfoOpaque
-{
-	Oid        comptypeOid; /* the complex type oid for the lov heap. */
-	Oid        heapOid;  /* Oid for the lov heap in the bitmap index. */
-	Oid        indexOid; /* Oid for the lov index in the bitmap index. */
-	Oid        heapRelfilenode; /* Oid for the relfilenode of the lov heap in the bitmap index. */
-	Oid        indexRelfilenode;/* Oid for the relfilenode of the lov index in the bitmap index. */
-	Oid        blkdirRelOid; /* Oid for block directory relation */
-	Oid        blkdirIdxOid; /* Oid for block directory index */
-	Oid        blkdirComptypeOid; /* complex type Oid for block directry relation */
-} IndexInfoOpaque;
 
 /* ----------------
  *	  ExprContext_CB
@@ -513,11 +492,6 @@ typedef struct DynamicTableScanInfo
 	 * Partitioning metadata for all relevant partition tables.
 	 */
 	List	   *partsMetadata;
-
-	/*
-	 * The memory context in which pidIndexes are allocated.
-	 */
-	MemoryContext memoryContext;
 } DynamicTableScanInfo;
 
 /*
@@ -531,12 +505,6 @@ typedef struct DynamicTableScanInfo
  * default incremental number when the array is out of space.
  */
 #define NUM_PID_INDEXES_ADDED 10
-
-/*
- * The global variable for the information relevant to dynamic table scans.
- * During execution, this will point to the value initialized in EState.
- */
-extern DynamicTableScanInfo *dynamicTableScanInfo;
 
 /* ----------------
  *	  EState information
@@ -1408,9 +1376,6 @@ typedef struct PlanState
 	void      (*cdbexplainfun)(struct PlanState *planstate, struct StringInfoData *buf);
 	/* callback before ExecutorEnd */
 
-	/* MemoryAccount to use for recording the memory usage of different plan nodes. */
-	MemoryAccount* memoryAccount;
-
 	/*
 	 * GpMon packet
 	 */
@@ -2275,8 +2240,6 @@ typedef struct MaterialState
 	void	   *ts_pos;
 	void	   *ts_markpos;
 	void	   *share_lk_ctxt;
-
-	bool		cached_workfiles_found;  /* true if found matching and usable cached workfiles */
 } MaterialState;
 
 /* ----------------
@@ -2323,7 +2286,7 @@ typedef struct SortState
 	GenericTupStore *tuplesortstate; /* private state of tuplesort.c */
 	/* CDB */ /* limit state */
 
-	/* GPDB_83MERGE_FIXME: Are these redundant with the "bound" fields? */
+	/* GPDB_83_MERGE_FIXME: Are these redundant with the "bound" fields? */
 	ExprState  *limitOffset;	/* OFFSET parameter, or NULL if none */
 	ExprState  *limitCount;		/* COUNT parameter, or NULL if none */
 	bool		noduplicates;	/* true if discard duplicate rows */

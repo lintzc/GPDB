@@ -147,10 +147,17 @@ bool ExecVariableListCodegen::GenerateExecVariableList(
 
 
   // Generate slot_getattr for attributes all the way to max_attr
-  assert(nullptr != slot_getattr_codegen_);
-  slot_getattr_codegen_->GenerateCode(codegen_utils);
-  llvm::Function* slot_getattr_func =
-      slot_getattr_codegen_->GetGeneratedFunction();
+  llvm::Function* slot_getattr_func = nullptr;
+  // If slot_getattr_codegen_ is not set or generation fails
+  // we revert to use the external slot_getattr()
+  if (nullptr == slot_getattr_codegen_ ||
+      false == slot_getattr_codegen_->GenerateCode(codegen_utils)) {
+    slot_getattr_func = codegen_utils->GetOrRegisterExternalFunction(
+        slot_getattr_regular, "slot_getattr_regular");
+  } else {
+    slot_getattr_func = slot_getattr_codegen_->GetGeneratedFunction();
+    assert(nullptr != slot_getattr_func);
+  }
 
   // In case the above generation failed, no point in continuing since that was
   // the most crucial part of ExecVariableList code generation.
@@ -164,9 +171,9 @@ bool ExecVariableListCodegen::GenerateExecVariableList(
   // -----------
   irb->SetInsertPoint(entry_block);
 #ifdef CODEGEN_DEBUG
-  codegen_utils->CreateElog(
-      DEBUG1,
-      "Codegen'ed ExecVariableList called!");
+  EXPAND_CREATE_ELOG(codegen_utils,
+                     DEBUG1,
+                     "Codegen'ed ExecVariableList called!");
 #endif
   irb->CreateBr(slot_check_block);
 
@@ -249,9 +256,9 @@ bool ExecVariableListCodegen::GenerateExecVariableList(
   // Fall back Block
   // ---------------
   irb->SetInsertPoint(fallback_block);
-  codegen_utils->CreateElog(
-      DEBUG1,
-      "Falling back to regular ExecVariableList");
+  EXPAND_CREATE_ELOG(codegen_utils,
+                     DEBUG1,
+                     "Falling back to regular ExecVariableList");
 
   codegen_utils->CreateFallback<ExecVariableListFn>(
       codegen_utils->GetOrRegisterExternalFunction(ExecVariableList,

@@ -175,6 +175,7 @@ typedef struct Query
 	struct GpPolicy *intoPolicy;
 } Query;
 
+
 /****************************************************************************
  *	Supporting data structures for Parse Trees
  *
@@ -218,7 +219,7 @@ typedef struct TypeName
 /*
  * ColumnRef - specifies a reference to a column, or possibly a whole tuple
  *
- * The "fields" list must be nonempty.	It can contain string Value nodes
+ * The "fields" list must be nonempty.  It can contain string Value nodes
  * (representing names) and A_Star nodes (representing occurrence of a '*').
  * Currently, A_Star must appear only as the last list element --- the grammar
  * is responsible for enforcing this!
@@ -451,7 +452,6 @@ typedef struct ColumnDef
 	bool		is_local;		/* column has local (non-inherited) def'n */
 	bool		is_not_null;	/* NOT NULL constraint specified? */
 	AttrNumber	attnum;			/* attribute number */
-	Oid			default_oid;	/* attrdef oid */
 	Node	   *raw_default;	/* default value (untransformed parse tree) */
 	char	   *cooked_default; /* nodeToString representation */
 	List	   *constraints;	/* other constraints on column */
@@ -569,11 +569,11 @@ typedef struct XmlSerialize
  *	  A range table is a List of RangeTblEntry nodes.
  *
  *	  A range table entry may represent a plain relation, a sub-select in
- *	  FROM, a common table expression, or the result of a JOIN clause. 
- *    (Only explicit JOIN syntax produces an RTE, not the implicit join
- *    resulting from multiple FROM items.  This is because we only need
- *    the RTE to deal with SQL features like outer joins and join-output-column
- *    aliasing.)  Other special RTE types also exist, as indicated by RTEKind.
+ *	  FROM, or the result of a JOIN clause.  (Only explicit JOIN syntax
+ *	  produces an RTE, not the implicit join resulting from multiple FROM
+ *	  items.  This is because we only need the RTE to deal with SQL features
+ *	  like outer joins and join-output-column aliasing.)  Other special
+ *	  RTE types also exist, as indicated by RTEKind.
  *
  *	  alias is an Alias node representing the AS alias-clause attached to the
  *	  FROM expression, or NULL if no clause.
@@ -1065,6 +1065,7 @@ typedef enum ObjectType
 	OBJECT_CONVERSION,
 	OBJECT_DATABASE,
 	OBJECT_DOMAIN,
+	OBJECT_EXTENSION,
 	OBJECT_FUNCTION,
 	OBJECT_INDEX,
 	OBJECT_LANGUAGE,
@@ -1108,17 +1109,14 @@ typedef struct CreateSchemaStmt
 
 	/*
 	 * In GPDB, when a CreateSchemaStmt is dispatched to executor nodes, the
-	 * following fields are set. schemaOid is the OID of the new schema.
+	 * following field is set.
 	 *
 	 * There's a special case for when the temporary namespace is created,
 	 * on the first use in the session. There are actually two temporary
 	 * namespaces, the regular one, and a temporary toast namespace. They are
-	 * both created in the same command, with istemp='true', schemaOid the
-	 * temp namespace's OID, and toastSchemaOid the temp toast namespace's OID.
+	 * both created in the same command, with istemp='true'.
 	 */
 	bool        istemp;         /* true for temp schemas (internal only) */
-	Oid			schemaOid;
-	Oid			toastSchemaOid;
 } CreateSchemaStmt;
 
 typedef enum DropBehavior
@@ -1126,6 +1124,45 @@ typedef enum DropBehavior
 	DROP_RESTRICT,				/* drop fails if any dependent objects */
 	DROP_CASCADE				/* remove dependent objects too */
 } DropBehavior;
+
+/* ----------------------
+ *		Create/Alter Extension Statements
+ * ----------------------
+ */
+
+typedef enum CreateExtensionState
+{
+	CREATE_EXTENSION_INIT,		/* not start to create extension */
+	CREATE_EXTENSION_BEGIN,     /* start to create extension */
+	CREATE_EXTENSION_END		/* finish to create extension */
+} CreateExtensionState;
+
+typedef struct CreateExtensionStmt
+{
+	NodeTag		type;
+	char	   *extname;
+	bool		if_not_exists;	/* just do nothing if it already exists? */
+	List	   *options;		/* List of DefElem nodes */
+	CreateExtensionState create_ext_state;		/* create extension state */
+} CreateExtensionStmt;
+
+/* Only used for ALTER EXTENSION UPDATE; later might need an action field */
+typedef struct AlterExtensionStmt
+{
+	NodeTag		type;
+	char	   *extname;
+	List	   *options;		/* List of DefElem nodes */
+} AlterExtensionStmt;
+
+typedef struct AlterExtensionContentsStmt
+{
+	NodeTag		type;
+	char	   *extname;		/* Extension's name */
+	int			action;			/* +1 = add object, -1 = drop object */
+	ObjectType	objtype;		/* Object's type */
+	List	   *objname;		/* Qualified name of the object */
+	List	   *objargs;		/* Arguments if needed (eg, for functions) */
+} AlterExtensionContentsStmt;
 
 /* ----------------------
  *	Alter Table
@@ -1137,14 +1174,6 @@ typedef struct AlterTableStmt
 	RangeVar   *relation;		/* table to work on */
 	List	   *cmds;			/* list of subcommands */
 	ObjectType	relkind;		/* type of object */
-
-	/* Workspace for use during AT processing/dispatch.  It might be better
-	 * to package there in a "context" node than to lay them out here.
-	 */
-	List		 *oidmap;		/* For reindex_relation */
-	int			oidInfoCount;	/* Vector of TableOidInfo pointers: */
-	TableOidInfo *oidInfo;		/* MPP Allow for hierarchy of tables to alter */
-
 } AlterTableStmt;
 
 typedef enum AlterTableType
@@ -1259,7 +1288,6 @@ typedef struct AlterPartitionCmd/* one subcmd of an ALTER TABLE...PARTITION */
 	Node	   *arg1;			/* argument 1 */
 	Node	   *arg2;			/* argument 2 */
 	int					location;	/* token location, or -1 if unknown */
-	List	   *newOids;	/* If applicable, list of new OIDs for constraints */
 } AlterPartitionCmd;
 
 typedef struct InheritPartitionCmd
@@ -1469,7 +1497,6 @@ typedef struct CreateStmt
 	char	   *tablespacename; /* table space to use, or NULL */
 	List       *distributedBy;   /* what columns we distribute the data by */
 	Node       *partitionBy;     /* what columns we partition the data by */
-	TableOidInfo oidInfo;
 	char	    relKind;         /* CDB: force relkind to this */
 	char		relStorage;
 	struct GpPolicy  *policy;
@@ -1518,6 +1545,7 @@ typedef struct CreateExternalStmt
 	bool		isweb;
 	bool		iswritable;
 	Node	   *sreh;			/* Single row error handling info */
+	List       *extOptions;		/* generic options to external table */
 	List	   *encoding;		/* List (size 1 max) of DefElem nodes for
 								   data encoding */
 	List       *distributedBy;   /* what columns we distribute the data by */
@@ -1579,7 +1607,6 @@ typedef struct Constraint
 {
 	NodeTag		type;
 	ConstrType	contype;
-	Oid			conoid;			/* constraint oid */
 	char	   *name;			/* name, or NULL if unnamed */
 	Node	   *raw_expr;		/* expr, as untransformed parse tree */
 	char	   *cooked_expr;	/* expr, as nodeToString representation */
@@ -1599,7 +1626,7 @@ typedef struct Constraint
  *
  * If skip_validation is true then we skip checking that the existing rows
  * in the table satisfy the constraint, and just install the catalog entries
- * for the constraint.	This is currently used only during CREATE TABLE
+ * for the constraint.  This is currently used only during CREATE TABLE
  * (when we know the table must be empty).
  * ----------
  */
@@ -1616,7 +1643,6 @@ typedef struct Constraint
 typedef struct FkConstraint
 {
 	NodeTag		type;
-	Oid			constrOid;		/* Constraint Oid */
 	char	   *constr_name;	/* Constraint name, or NULL if unnamed */
 	RangeVar   *pktable;		/* Primary key table */
 	List	   *fk_attrs;		/* Attributes of foreign key */
@@ -1746,7 +1772,6 @@ typedef struct CreateFileSpaceStmt
 	char	   *filespacename;
 	char	   *owner;
 	List       *locations;  /* List of FileSpaceEntry */
-	Oid         fsoid;
 } CreateFileSpaceStmt;
 
 
@@ -1775,7 +1800,6 @@ typedef struct CreateTableSpaceStmt
 	char	   *tablespacename;
 	char	   *owner;
 	char       *filespacename;
-	Oid         tsoid;
 } CreateTableSpaceStmt;
 
 /* ----------------------
@@ -1815,10 +1839,6 @@ typedef struct CreatePLangStmt
 	List	   *plinline;		/* optional inline function (qual. name) */
 	List	   *plvalidator;	/* optional validator function (qual. name) */
 	bool		pltrusted;		/* PL is trusted */
-	Oid	   		plangOid;		/* oid for PL */
-	Oid			plhandlerOid;	/* oid for PL call handler function */
-	Oid			plinlineOid;	/* oid for inline function */
-	Oid			plvalidatorOid;	/* oid for validator function */
 } CreatePLangStmt;
 
 typedef struct DropPLangStmt
@@ -1838,8 +1858,6 @@ typedef struct CreateQueueStmt
 	NodeTag		type;
 	char	   *queue;			/* resource queue name */
 	List	   *options;		/* List of DefElem nodes */
-	Oid	   		queueOid;		/* oid for queue  */
-	List	   *optids;			/* List of oids for nodes */
 } CreateQueueStmt;
 
 typedef struct AlterQueueStmt
@@ -1847,7 +1865,6 @@ typedef struct AlterQueueStmt
 	NodeTag		type;
 	char	   *queue;			/* resource queue  name */
 	List	   *options;		/* List of DefElem nodes */
-	List	   *optids;			/* List of oids for nodes */
 } AlterQueueStmt;
 
 typedef struct DropQueueStmt
@@ -1878,7 +1895,6 @@ typedef struct CreateRoleStmt
 	RoleStmtType stmt_type;		/* ROLE/USER/GROUP */
 	char	   *role;			/* role name */
 	List	   *options;		/* List of DefElem nodes */
-	Oid			roleOid;
 } CreateRoleStmt;
 
 typedef struct AlterRoleStmt
@@ -1928,8 +1944,6 @@ typedef struct CreateSeqStmt
 	NodeTag		type;
 	RangeVar   *sequence;		/* the sequence to create */
 	List	   *options;
-	Oid        	relOid;			/* create table with this relOid */
-	Oid			comptypeOid;
 } CreateSeqStmt;
 
 typedef struct AlterSeqStmt
@@ -1953,16 +1967,6 @@ typedef struct DefineStmt
 	List	   *definition;		/* a list of DefElem */
 	bool        ordered;        /* signals ordered aggregates */
 	bool		trusted;		/* used only for PROTOCOL as this point */
-
-	/*
-	 * These are filled in by the dispatcher, when sending the command
-	 * to segments.
-	 */
-	Oid			newOid;			/* the new Oid of the object */
-	Oid			arrayOid;		/* for CREATE TYPE, array type's OID */
-	Oid			commutatorOid;	/* for CREATE OPERATOR, commutator's OID */
-	Oid			negatorOid;		/* for CREATE OPERATOR, negator's OID */
-
 } DefineStmt;
 
 /* ----------------------
@@ -1975,7 +1979,6 @@ typedef struct CreateDomainStmt
 	List	   *domainname;		/* qualified name (list of Value strings) */
 	TypeName   *typname;		/* the base type */
 	List	   *constraints;	/* constraints (list of Constraint nodes) */
-	Oid		    domainOid;
 } CreateDomainStmt;
 
 /* ----------------------
@@ -1991,15 +1994,6 @@ typedef struct CreateOpClassStmt
 	TypeName   *datatype;		/* datatype of indexed column */
 	List	   *items;			/* List of CreateOpClassItem nodes */
 	bool		isDefault;		/* Should be marked as default for type? */
-
-	/*
-	 * When dispatched from QD to QEs, opclassOid is the OID to use for
-	 * the opclass, and opfamilyOid is the OID of the operator family
-	 * to associate it with.
-	 */
-	Oid			opclassOid;
-	Oid			opfamilyOid;
-	bool		createOpFamily;
 } CreateOpClassStmt;
 
 #define OPCLASS_ITEM_OPERATOR		1
@@ -2029,9 +2023,6 @@ typedef struct CreateOpFamilyStmt
 	NodeTag		type;
 	List	   *opfamilyname;	/* qualified name (list of Value strings) */
 	char	   *amname;			/* name of index AM opfamily is for */
-
-	Oid			newOid;			/* Created opfamily's OID, when dispatched
-								 * from QD to QEs */
 } CreateOpFamilyStmt;
 
 /* ----------------------
@@ -2091,13 +2082,6 @@ typedef struct TruncateStmt
 	NodeTag		type;
 	List	   *relations;		/* relations (RangeVars) to be truncated */
 	DropBehavior behavior;		/* RESTRICT or CASCADE behavior */
-	List	   *relids;
-	List	   *new_heap_oids;
-	List	   *new_toast_oids;
-	List	   *new_aoseg_oids;
-	List	   *new_aoblkdir_oids;
-	List       *new_aovisimap_oids;
-	List	   *new_ind_oids;
 } TruncateStmt;
 
 /* ----------------------
@@ -2193,10 +2177,7 @@ typedef struct IndexStmt
 	bool		isconstraint;	/* is it from a CONSTRAINT clause? */
 	char	   *altconname;		/* constraint name, if desired name differs
 								 * from idxname and isconstraint, else NULL. */
-	Oid			constrOid;		/* constraint oid */
 	bool		concurrent;		/* should this be a concurrent index build? */
-	List		*idxOids;		/* For MPP. We use List here because the
-								 * bitmap index needs 3 additional oids. */
 	bool		is_split_part;	/* Is this for SPLIT PARTITION command? */
 } IndexStmt;
 
@@ -2213,8 +2194,6 @@ typedef struct CreateFunctionStmt
 	TypeName   *returnType;		/* the return type */
 	List	   *options;		/* a list of DefElem */
 	List	   *withClause;		/* a list of DefElem */
-	Oid			funcOid;
-	Oid			shelltypeOid;
 } CreateFunctionStmt;
 
 typedef enum FunctionParameterMode
@@ -2260,7 +2239,7 @@ typedef struct InlineCodeBlock
 	NodeTag		type;
 	char	   *source_text;	/* source text of anonymous code block */
 	Oid			langOid;		/* OID of selected language */
-	bool		langIsTrusted;  /* trusted property of the language */
+	bool		langIsTrusted;	/* trusted property of the language */
 } InlineCodeBlock;
 
 /* ----------------------
@@ -2443,8 +2422,6 @@ typedef struct CompositeTypeStmt
 	NodeTag		type;
 	RangeVar   *typevar;		/* the composite type to be created */
 	List	   *coldeflist;		/* list of ColumnDef nodes */
-	Oid			relOid;
-	Oid			comptypeOid;
 } CompositeTypeStmt;
 
 /* ----------------------
@@ -2456,10 +2433,6 @@ typedef struct CreateEnumStmt
 	NodeTag		type;
 	List	   *typeName;		/* qualified name (list of Value strings) */
 	List	   *vals;			/* enum values (list of Value strings) */
-
-	Oid			enumTypeOid;	/* Oid to assign, when dispatching from QD to QEs */
-	Oid			enumArrayOid;	/* Oid to assign to array type, when dispatching from QD to QEs */
-	List	   *valOids;		/* Oids to assign to the values */
 } CreateEnumStmt;
 
 
@@ -2474,10 +2447,6 @@ typedef struct ViewStmt
 	List	   *aliases;		/* target column names */
 	Node	   *query;			/* the SELECT query */
 	bool		replace;		/* replace an existing view? */
-	Oid         relOid;			/* create view with this relOid */
-	Oid			comptypeOid;
-	Oid			comptypeArrayOid;
-	Oid			rewriteOid;		/* Oid for rewrite rule */
 } ViewStmt;
 
 /* ----------------------
@@ -2499,7 +2468,6 @@ typedef struct CreatedbStmt
 	NodeTag		type;
 	char	   *dbname;			/* name of database to create */
 	List	   *options;		/* List of DefElem nodes */
-	Oid			dbOid;
 } CreatedbStmt;
 
 /* ----------------------
@@ -2540,8 +2508,6 @@ typedef struct ClusterStmt
 	NodeTag		type;
 	RangeVar   *relation;		/* relation being indexed, or NULL if all */
 	char	   *indexname;		/* original index defined */
-	TableOidInfo oidInfo;
-	List 	   *new_ind_oids;	/* new OIDs for indexes */
 } ClusterStmt;
 
 /* ----------------------
@@ -2565,12 +2531,6 @@ typedef struct VacuumStmt
 
 	/* Object IDs for relations which expand from partition definitions */
 	List	   *expanded_relids;
-
-	/*
-	 * OIDs for relfilenode, the internal heap and index relfilenodes for a bitmap index.
-	 * We need these since vacuuming a bitmap index is done through reindex.
-	 */
-	List *extra_oids;
 
 	/*
 	 * AO segment file num to compact (integer).
@@ -2689,7 +2649,6 @@ typedef struct ReindexStmt
 	const char *name;			/* name of database to reindex */
 	bool		do_system;		/* include system tables in database case */
 	bool		do_user;		/* include user tables in database case */
-	List	   *new_ind_oids;	/* index oids */
 	Oid			relid;			/* oid of TABLE, used by QE */
 } ReindexStmt;
 
@@ -2705,7 +2664,6 @@ typedef struct CreateConversionStmt
 	char	   *to_encoding_name;		/* destination encoding name */
 	List	   *func_name;		/* qualified conversion function name */
 	bool		def;			/* is this a default conversion? */
-	Oid			convOid;
 } CreateConversionStmt;
 
 /* ----------------------
@@ -2719,7 +2677,6 @@ typedef struct CreateCastStmt
 	TypeName   *targettype;
 	FuncWithArgs *func;
 	CoercionContext context;
-	Oid			castOid;
 } CreateCastStmt;
 
 /* ----------------------

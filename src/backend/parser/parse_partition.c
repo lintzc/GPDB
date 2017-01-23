@@ -1,6 +1,6 @@
 /*-------------------------------------------------------------------------
  *
- * parse_node.c
+ * parse_partition.c
  *	  handle partition clauses in parser
  *
  * Portions Copyright (c) 2005-2010, Greenplum inc
@@ -3176,7 +3176,7 @@ preprocess_range_spec(partValidationState *vstate)
 
 
 						newrtypeId = ((Form_pg_operator) GETSTRUCT(optup))->oprright;
-						ReleaseOperator(optup);
+						ReleaseSysCache(optup);
 
 						if (rtypeId != newrtypeId)
 						{
@@ -3548,7 +3548,7 @@ partition_range_every(ParseState *pstate, PartitionBy *pBy, List *coltypes,
 						 ((IsA(pBSpec, PartitionValuesSpec)) ?
 						  parser_errposition(pstate,
 								((PartitionValuesSpec *) pBSpec)->location) :
-				/* else use invalid parsestate/postition */
+				/* else use invalid parsestate/position */
 						  parser_errposition(NULL, 0)
 						  )
 						 ));
@@ -3974,7 +3974,6 @@ validate_range_partition(partValidationState *vstate)
 							"specification in partition clause",
 							specTName),
 			/* MPP-4249: use value spec location if have one */
-					 errOmitLocation(true),
 					 parser_errposition(vstate->pstate,
 								 ((PartitionValuesSpec *) spec)->location)));
 		}

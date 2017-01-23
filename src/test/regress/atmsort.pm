@@ -268,8 +268,8 @@ sub init_match_subs
     $here_matchsubs = << 'EOF_matchsubs';
 
 # some cleanup of greenplum-specific messages
-m/\s+(?:\W)?(?:\W)?\(seg.*pid.*\)/
-s/\s+(\W)?(\W)?\(seg.*pid.*\)//
+m/\s+\(seg.*pid.*\)/
+s/\s+\(seg.*pid.*\)//
 
 # distributed transactions
 m/^(?:ERROR|WARNING|CONTEXT|NOTICE):.*gid\s+=\s+(?:\d+)/
@@ -397,21 +397,11 @@ sub init_matchignores
 
     $here_matchignores = << 'EOF_matchignores';
 
-        # XXX XXX: note the discrepancy in the NOTICE messages
-        # 'distributed by' vs 'DISTRIBUTED BY'
-m/^NOTICE:  Table doesn\'t have \'distributed by\' clause/
-m/^NOTICE:  Table doesn\'t have \'DISTRIBUTED BY\' clause/
-
 m/^NOTICE:  Dropping a column that is part of the distribution policy/
 
 m/^NOTICE:  Table has parent\, setting distribution columns to match parent table/
 
-m/^HINT:  The \'DISTRIBUTED BY\' clause determines the distribution of data/
-
 m/^WARNING:  Referential integrity \(.*\) constraints are not supported in Greenplum Database/
-
-
-m/^\s*Distributed by:\s+\(.*\)\s*$/
 
         # ignore notices for DROP sqlobject IF EXISTS "objectname"
         # eg NOTICE:  table "foo" does not exist, skipping
@@ -1370,8 +1360,6 @@ EOF_formatfix
             {
                 $ini =~ s/\s+(?:\W)?(?:\W)?\(seg.*pid.*\)//;
 
-                # also remove line numbers from errors
-                $ini =~ s/\s+(?:\W)?(?:\W)?\(\w+\.[ch]:\d+\)/ (SOMEFILE:SOMEFUNC)/;
                 my $outsize = scalar(@outarr);
 
                 my $lastguy = -1;

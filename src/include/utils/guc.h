@@ -100,6 +100,19 @@ typedef enum
 	PGC_S_SESSION				/* SET command */
 } GucSource;
 
+typedef struct name_value_pair
+{
+	char       *name;
+	char       *value;
+	struct name_value_pair *next;
+} name_value_pair;
+
+extern bool ParseConfigFile(const char *config_file, const char *calling_file,
+							int depth, GucContext context, int elevel,
+							struct name_value_pair **head_p,
+							struct name_value_pair **tail_p);
+extern void free_name_value_list(struct name_value_pair * list);
+
 typedef const char *(*GucStringAssignHook) (const char *newval, bool doit, GucSource source);
 typedef bool (*GucBoolAssignHook) (bool newval, bool doit, GucSource source);
 typedef bool (*GucIntAssignHook) (int newval, bool doit, GucSource source);
@@ -198,7 +211,6 @@ extern bool Disable_persistent_recovery_logging;
 extern bool	Debug_persistent_store_print;
 extern bool Debug_persistent_bootstrap_print;
 extern bool persistent_integrity_checks;
-extern bool validate_previous_free_tid;
 extern bool disable_persistent_diagnostic_dump;
 extern bool debug_persistent_ptcat_verification;
 extern bool debug_print_persistent_checks;
@@ -223,7 +235,6 @@ extern bool gp_before_persistence_work;
 extern bool gp_before_filespace_setup;
 extern bool gp_startup_integrity_checks;
 extern bool gp_change_tracking;
-extern bool	gp_persistent_skip_free_list;
 extern bool	gp_persistent_repair_global_sequence;
 extern bool gp_validate_pt_info_relcache;
 extern bool Debug_print_xlog_relation_change_info;
@@ -235,15 +246,13 @@ extern bool Debug_filerep_gcov;
 extern bool Debug_filerep_config_print;
 extern bool Debug_filerep_verify_performance_print;
 extern bool Debug_filerep_memory_log_flush;
-extern bool filerep_inject_listener_fault;
-extern bool filerep_inject_db_startup_fault;
-extern bool filerep_inject_change_tracking_recovery_fault;
 extern bool filerep_mirrorvalidation_during_resync;
 extern bool log_filerep_to_syslogger;
 extern bool gp_crash_recovery_suppress_ao_eof;
 extern bool gp_create_table_random_default_distribution;
 extern bool gp_allow_non_uniform_partitioning_ddl;
 extern bool gp_enable_exchange_default_partition;
+extern int  dtx_phase2_retry_count;
 
 /* WAL replication debug gucs */
 extern bool debug_walrepl_snd;
@@ -295,6 +304,7 @@ extern int ddboost_buf_size;
 
 extern bool gp_cancel_query_print_log;
 extern int gp_cancel_query_delay_time;
+extern bool vmem_process_interrupt;
 
 extern bool gp_partitioning_dynamic_selection_log;
 extern int gp_max_partition_level;
@@ -435,6 +445,7 @@ extern int	optimizer_samples_number;
 extern int optimizer_log_failure;
 extern double optimizer_cost_threshold;
 extern double optimizer_nestloop_factor;
+extern double optimizer_sort_factor;
 extern bool optimizer_cte_inlining;
 extern int optimizer_cte_inlining_bound;
 extern double optimizer_damping_factor_filter;
@@ -442,6 +453,7 @@ extern double optimizer_damping_factor_join;
 extern double optimizer_damping_factor_groupby;
 extern int optimizer_segments;
 extern int optimizer_join_arity_for_associativity_commutativity;
+extern int optimizer_penalize_broadcast_threshold;
 extern int optimizer_array_expansion_threshold;
 extern int optimizer_join_order_threshold;
 extern bool optimizer_analyze_root_partition;

@@ -206,7 +206,6 @@ bool		Debug_persistent_store_print = false;
 int			Debug_persistent_store_print_level = LOG;
 bool		Debug_persistent_bootstrap_print = false;
 bool		persistent_integrity_checks = true;
-bool		validate_previous_free_tid = true;
 bool		disable_persistent_diagnostic_dump = false;
 bool		debug_persistent_ptcat_verification = false;
 bool		debug_print_persistent_checks = false;
@@ -224,6 +223,7 @@ bool		gp_temporary_files_filespace_repair = false;
 bool		gp_create_table_random_default_distribution = true;
 bool		gp_allow_non_uniform_partitioning_ddl = true;
 bool		gp_enable_exchange_default_partition = false;
+int			dtx_phase2_retry_count = 0;
 
 bool		log_dispatch_stats = false;
 
@@ -255,7 +255,6 @@ bool		gp_before_persistence_work = false;
 bool		gp_before_filespace_setup = false;
 bool		gp_startup_integrity_checks = true;
 bool		gp_change_tracking = true;
-bool		gp_persistent_skip_free_list = false;
 bool		gp_persistent_repair_global_sequence = false;
 bool		gp_validate_pt_info_relcache = false;
 bool		Debug_print_xlog_relation_change_info = false;
@@ -268,9 +267,6 @@ bool		Debug_filerep_gcov = false;
 bool		Debug_filerep_config_print = false;
 bool		Debug_filerep_verify_performance_print = false;
 bool		Debug_filerep_memory_log_flush = false;
-bool		filerep_inject_listener_fault = false;
-bool		filerep_inject_db_startup_fault = false;
-bool		filerep_inject_change_tracking_recovery_fault = false;
 bool		filerep_mirrorvalidation_during_resync = false;
 bool		log_filerep_to_syslogger = false;
 
@@ -349,9 +345,6 @@ char	   *gp_connectemc_mode;
 EmcConnectModeType_t gp_emcconnect_transport;
 #endif
 
-/* The following GUC holds the default version for append-only tables */
-int			test_appendonly_version_default = AORelationVersion_GetLatest();
-
 static char *gp_log_gang_str;
 static char *gp_log_fts_str;
 static char *gp_log_interconnect_str;
@@ -415,6 +408,7 @@ static char *gp_test_deadlock_hazard_report_level_str;
 /* query cancellation GUC */
 bool		gp_cancel_query_print_log;
 int			gp_cancel_query_delay_time;
+bool		vmem_process_interrupt = false;
 
 /* partitioning GUC */
 bool		gp_partitioning_dynamic_selection_log;
@@ -541,6 +535,7 @@ int			optimizer_samples_number;
 int			optimizer_log_failure;
 double		optimizer_cost_threshold;
 double		optimizer_nestloop_factor;
+double		optimizer_sort_factor;
 bool		optimizer_cte_inlining;
 int			optimizer_cte_inlining_bound;
 double		optimizer_damping_factor_filter;
@@ -548,6 +543,7 @@ double		optimizer_damping_factor_join;
 double		optimizer_damping_factor_groupby;
 int			optimizer_segments;
 int			optimizer_join_arity_for_associativity_commutativity;
+int			optimizer_penalize_broadcast_threshold;
 int         optimizer_array_expansion_threshold;
 int         optimizer_join_order_threshold;
 bool		optimizer_analyze_root_partition;
@@ -1085,16 +1081,6 @@ struct config_bool ConfigureNamesBool_gp[] =
 			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
 		},
 		&gp_enable_slow_writer_testmode,
-		false, NULL, NULL
-	},
-
-	{
-		{"gp_enable_slow_cursor_testmode", PGC_USERSET, DEVELOPER_OPTIONS,
-			gettext_noop("Slow down cursor gangs -- to facilitate race-condition testing."),
-			NULL,
-			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
-		},
-		&gp_enable_slow_cursor_testmode,
 		false, NULL, NULL
 	},
 
@@ -1729,16 +1715,6 @@ struct config_bool ConfigureNamesBool_gp[] =
 	},
 
 	{
-		{"validate_previous_free_tid", PGC_SUSET, UNGROUPED,
-			gettext_noop("When set checks that the previous free TID of the current free tuple is a valid free tuple."),
-			NULL,
-			GUC_SUPERUSER_ONLY | GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
-		},
-		&validate_previous_free_tid,
-		true, NULL, NULL
-	},
-
-	{
 		{"disable_persistent_diagnostic_dump", PGC_SUSET, DEVELOPER_OPTIONS,
 			gettext_noop("When set disables printing full PT on erros."),
 			NULL,
@@ -2179,17 +2155,6 @@ struct config_bool ConfigureNamesBool_gp[] =
 		true, NULL, NULL
 	},
 
-
-	{
-		{"gp_persistent_skip_free_list", PGC_SUSET, UNGROUPED,
-			gettext_noop("Avoids using the persistent free list and always allocates a new tuple."),
-			NULL,
-			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
-		},
-		&gp_persistent_skip_free_list,
-		false, NULL, NULL
-	},
-
 	{
 		{"gp_persistent_repair_global_sequence", PGC_SUSET, UNGROUPED,
 			gettext_noop("Repair a global sequence number to use the maximum scanned value."),
@@ -2296,36 +2261,6 @@ struct config_bool ConfigureNamesBool_gp[] =
 			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
 		},
 		&Debug_filerep_memory_log_flush,
-		false, NULL, NULL
-	},
-
-	{
-		{"filerep_inject_listener_fault", PGC_SUSET, DEVELOPER_OPTIONS,
-			gettext_noop("inject fault before filerep listener is started"),
-			NULL,
-			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
-		},
-		&filerep_inject_listener_fault,
-		false, NULL, NULL
-	},
-
-	{
-		{"filerep_inject_db_startup_fault", PGC_SUSET, DEVELOPER_OPTIONS,
-			gettext_noop("inject mirroring fault during database startup"),
-			NULL,
-			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
-		},
-		&filerep_inject_db_startup_fault,
-		false, NULL, NULL
-	},
-
-	{
-		{"filerep_inject_change_tracking_recovery_fault", PGC_SUSET, DEVELOPER_OPTIONS,
-			gettext_noop("inject fault during change tracking recovery"),
-			NULL,
-			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
-		},
-		&filerep_inject_change_tracking_recovery_fault,
 		false, NULL, NULL
 	},
 
@@ -3301,7 +3236,7 @@ struct config_bool ConfigureNamesBool_gp[] =
 		{"optimizer_parallel_union", PGC_USERSET, DEVELOPER_OPTIONS,
 			gettext_noop("Enable parallel execution for UNION/UNION ALL queries."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
+			GUC_NOT_IN_SAMPLE
 		},
 		&optimizer_parallel_union,
 		false, NULL, NULL
@@ -3417,6 +3352,17 @@ struct config_bool ConfigureNamesBool_gp[] =
 #endif
 		assign_codegen, NULL
 	},
+
+	{
+		{"vmem_process_interrupt", PGC_USERSET, DEVELOPER_OPTIONS,
+			gettext_noop("Checks for interrupts before reserving VMEM"),
+			NULL,
+			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE | GUC_GPDB_ADDOPT
+		},
+		&vmem_process_interrupt,
+		false, NULL, NULL
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, false, NULL, NULL
@@ -3831,16 +3777,6 @@ struct config_int ConfigureNamesInt_gp[] =
 		},
 		&MaxAppendOnlyTables,
 		2048, 0, INT_MAX, NULL, NULL
-	},
-
-	{
-		{"test_appendonly_version_default", PGC_USERSET, APPENDONLY_TABLES,
-			gettext_noop("Align append-only blocks to 64 bits."),
-			NULL,
-			GUC_GPDB_ADDOPT | GUC_NOT_IN_SAMPLE | GUC_NO_SHOW_ALL
-		},
-		&test_appendonly_version_default,
-		AORelationVersion_GetLatest(), 0, INT_MAX, NULL, NULL
 	},
 
 	{
@@ -4723,6 +4659,16 @@ struct config_int ConfigureNamesInt_gp[] =
 	},
 
 	{
+		{"optimizer_penalize_broadcast_threshold", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("Maximum number of rows of a relation that can be broadcasted without penalty."),
+			NULL,
+			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
+		},
+		&optimizer_penalize_broadcast_threshold,
+		10000000, 0, INT_MAX, NULL, NULL
+	},
+
+	{
 		{"optimizer_mdcache_size", PGC_USERSET, RESOURCES_MEM,
 			gettext_noop("Sets the size of MDCache."),
 			NULL,
@@ -4805,6 +4751,16 @@ struct config_int ConfigureNamesInt_gp[] =
 		0,
 #endif
 		0, INT_MAX, NULL, NULL
+	},
+
+	{
+		{"dtx_phase2_retry_count", PGC_SUSET, DEVELOPER_OPTIONS,
+			gettext_noop("Maximum number of retries during two phase commit after which master PANICs."),
+			NULL,
+			GUC_SUPERUSER_ONLY |  GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE | GUC_GPDB_ADDOPT
+		},
+		&dtx_phase2_retry_count,
+		2, 0, 10, NULL, NULL
 	},
 
 	/* End-of-list marker */
@@ -4895,6 +4851,7 @@ struct config_real ConfigureNamesReal_gp[] =
 		&gp_statistics_ndistinct_scaling_ratio_threshold,
 		0.10, 0.001, 1.0, NULL, NULL
 	},
+
 	{
 		{"gp_statistics_sampling_threshold", PGC_USERSET, STATS_ANALYZE,
 			gettext_noop("Only tables larger than this size will be sampled."),
@@ -4904,6 +4861,7 @@ struct config_real ConfigureNamesReal_gp[] =
 		&gp_statistics_sampling_threshold,
 		20000.0, 0.0, DBL_MAX, NULL, NULL
 	},
+
 	{
 		{"gp_resqueue_priority_cpucores_per_segment", PGC_POSTMASTER, RESOURCES_MGM,
 			gettext_noop("Number of processing units associated with a segment."),
@@ -4970,6 +4928,16 @@ struct config_real ConfigureNamesReal_gp[] =
 		},
 		&optimizer_nestloop_factor,
 		1024.0, 1.0, DBL_MAX, NULL, NULL
+	},
+
+	{
+		{"optimizer_sort_factor",PGC_USERSET, DEVELOPER_OPTIONS,
+			gettext_noop("set the sort cost factor in the optimizer, 1.0 means same as default, > 1.0 means more costly than default, < 1.0 means means less costly than default"),
+			NULL,
+			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
+		},
+		&optimizer_sort_factor,
+		1.0, 0.0, DBL_MAX, NULL, NULL
 	},
 
 	/* End-of-list marker */
@@ -5318,7 +5286,7 @@ struct config_string ConfigureNamesString_gp[] =
 
 	{
 		{"gp_email_smtp_server", PGC_SUSET, LOGGING,
-			gettext_noop("Sets the SMTP server and port used to send e-mail alerts."),
+			gettext_noop("Sets the SMTP server and port used to send email alerts."),
 			NULL,
 			GUC_SUPERUSER_ONLY
 		},
@@ -5345,7 +5313,7 @@ struct config_string ConfigureNamesString_gp[] =
 	},
 	{
 		{"gp_email_from", PGC_SUSET, LOGGING,
-			gettext_noop("Sets email address of the sender of email alerts (our e-mail id)."),
+			gettext_noop("Sets email address of the sender of email alerts (our email id)."),
 			NULL,
 			GUC_SUPERUSER_ONLY
 		},
@@ -5354,7 +5322,7 @@ struct config_string ConfigureNamesString_gp[] =
 	},
 	{
 		{"gp_email_to", PGC_SUSET, LOGGING,
-			gettext_noop("Sets email address(es) to send alerts to.  Maybe be multiple email addresses."),
+			gettext_noop("Sets email address(es) to send alerts to.  May be multiple email addresses separated by semi-colon."),
 			NULL,
 			GUC_SUPERUSER_ONLY | GUC_LIST_INPUT
 		},

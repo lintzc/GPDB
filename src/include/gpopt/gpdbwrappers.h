@@ -23,7 +23,6 @@
 typedef struct SysScanDescData *SysScanDesc;
 typedef struct SnapshotData *Snapshot;
 typedef int LOCKMODE;
-typedef struct _FuncCandidateList *FuncCandidateList;
 struct TypeCacheEntry;
 typedef struct NumericData *Numeric;
 typedef struct HeapTupleData *HeapTuple;
@@ -52,6 +51,9 @@ struct GpPolicy;
 struct PartitionSelector;
 struct SelectedParts;
 struct Motion;
+struct Var;
+struct Const;
+struct ArrayExpr;
 
 namespace gpdb {
 
@@ -205,9 +207,6 @@ namespace gpdb {
 	// data access property of given function
 	char CFuncDataAccess(Oid funcid);
 
-	// list of candidate functions with the given names
-	FuncCandidateList FclFuncCandidates(List *names, int nargs);
-
 	// trigger name
 	char *SzTriggerName(Oid triggerid);
 
@@ -350,7 +349,7 @@ namespace gpdb {
 	ListCell *PlcListTail(List *l);
 
 	// number of items in a list
-	int UlListLength(List *l);
+	uint32 UlListLength(List *l);
 
 	// return the nth element in a list of pointers
 	void *PvListNth(List *list, int n);
@@ -579,14 +578,14 @@ namespace gpdb {
 	// check permissions on range table 
 	void CheckRTPermissions(List *plRangeTable);
 	
-	// get index operator properties
-	void IndexOpProperties(Oid opno, Oid opclass, int *strategy, Oid *subtype, bool *recheck);
+	// get index operator family properties
+	void IndexOpProperties(Oid opno, Oid opfamily, int *strategy, Oid *subtype, bool *recheck);
 	
-	// get oids of classes this operator belongs to
-	List *PlScOpOpClasses(Oid opno);
+	// get oids of families this operator belongs to
+	List *PlScOpOpFamilies(Oid opno);
 	
 	// get oids of op classes for the index keys
-	List *PlIndexOpClasses(Oid oidIndex);
+	List *PlIndexOpFamilies(Oid oidIndex);
 
 	// returns the result of evaluating 'pexpr' as an Expr. Caller keeps ownership of 'pexpr'
 	// and takes ownership of the result 

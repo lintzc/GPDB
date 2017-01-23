@@ -25,6 +25,7 @@
 #include "codegen/utils/gp_codegen_utils.h"
 #include "codegen/pg_arith_func_generator.h"
 #include "codegen/pg_date_func_generator.h"
+#include "codegen/pg_numeric_func_generator.h"
 
 #include "llvm/IR/IRBuilder.h"
 
@@ -46,7 +47,7 @@ using gpcodegen::OpExprTreeGenerator;
 using gpcodegen::ExprTreeGenerator;
 using gpcodegen::GpCodegenUtils;
 using gpcodegen::PGFuncGeneratorInterface;
-using gpcodegen::PGFuncGenerator;
+using gpcodegen::PGFuncGeneratorFn;
 using gpcodegen::CodeGenFuncMap;
 using llvm::IRBuilder;
 
@@ -61,77 +62,137 @@ void OpExprTreeGenerator::InitializeSupportedFunction() {
       new PGGenericFuncGenerator<int32_t, int32_t, int32_t>(
           141,
           "int4mul",
-          &PGArithFuncGenerator<int32_t, int32_t, int32_t>::MulWithOverflow));
+          &PGArithFuncGenerator<int32_t, int32_t, int32_t>::MulWithOverflow,
+          nullptr,
+          true));
 
   supported_function_[149] = std::unique_ptr<PGFuncGeneratorInterface>(
       new PGIRBuilderFuncGenerator<bool, int32_t, int32_t>(
           149,
           "int4le",
-          &IRBuilder<>::CreateICmpSLE));
+          &IRBuilder<>::CreateICmpSLE,
+          true));
 
   supported_function_[177] = std::unique_ptr<PGFuncGeneratorInterface>(
       new PGGenericFuncGenerator<int32_t, int32_t, int32_t>(
           177,
           "int4pl",
-          &PGArithFuncGenerator<int32_t, int32_t, int32_t>::AddWithOverflow));
+          &PGArithFuncGenerator<int32_t, int32_t, int32_t>::AddWithOverflow,
+          nullptr,
+          true));
 
+  // int4_sum is not a strict function. It checks if there are NULL arguments
+  // and performs actions accordingly.
   supported_function_[1841] = std::unique_ptr<PGFuncGeneratorInterface>(
       new PGGenericFuncGenerator<int64_t, int64_t, int32_t>(
           1841,
           "int4_sum",
-          &PGArithFuncGenerator<int64_t, int64_t, int32_t>::AddWithOverflow));
+          &PGArithFuncGenerator<int64_t, int64_t, int32_t>::AddWithOverflow,
+          &PGArithFuncGenerator<int64_t, int64_t, int32_t>::
+          CreateArgumentNullChecks,
+          false));
 
   supported_function_[181] = std::unique_ptr<PGFuncGeneratorInterface>(
       new PGGenericFuncGenerator<int32_t, int32_t, int32_t>(
           181,
           "int4mi",
-          &PGArithFuncGenerator<int32_t, int32_t, int32_t>::SubWithOverflow));
+          &PGArithFuncGenerator<int32_t, int32_t, int32_t>::SubWithOverflow,
+          nullptr,
+          true));
 
   supported_function_[463] = std::unique_ptr<PGFuncGeneratorInterface>(
       new PGGenericFuncGenerator<int64_t, int64_t, int64_t>(
           463,
           "int8pl",
-          &PGArithFuncGenerator<int64_t, int64_t, int64_t>::AddWithOverflow));
+          &PGArithFuncGenerator<int64_t, int64_t, int64_t>::AddWithOverflow,
+          nullptr,
+          true));
 
   supported_function_[1219] = std::unique_ptr<PGFuncGeneratorInterface>(
       new PGGenericFuncGenerator<int64_t, int64_t>(
           1219,
           "int8inc",
-          &PGArithUnaryFuncGenerator<int64_t, int64_t>::IncWithOverflow));
+          &PGArithUnaryFuncGenerator<int64_t, int64_t>::IncWithOverflow,
+          nullptr,
+          true));
 
+  // int8inc is not strict, but it does not check if there are NULL attributes.
   supported_function_[2803] = std::unique_ptr<PGFuncGeneratorInterface>(
       new PGGenericFuncGenerator<int64_t, int64_t>(
           2803,
           "int8inc",
-          &PGArithUnaryFuncGenerator<int64_t, int64_t>::IncWithOverflow));
+          &PGArithUnaryFuncGenerator<int64_t, int64_t>::IncWithOverflow,
+          nullptr,
+          false));
 
   supported_function_[216] = std::unique_ptr<PGFuncGeneratorInterface>(
       new PGGenericFuncGenerator<float8, float8, float8>(
           216,
           "float8mul",
-          &PGArithFuncGenerator<float8, float8, float8>::MulWithOverflow));
+          &PGArithFuncGenerator<float8, float8, float8>::MulWithOverflow,
+          nullptr,
+          true));
 
   supported_function_[218] = std::unique_ptr<PGFuncGeneratorInterface>(
       new PGGenericFuncGenerator<float8, float8, float8>(
           218,
           "float8pl",
-          &PGArithFuncGenerator<float8, float8, float8>::AddWithOverflow));
+          &PGArithFuncGenerator<float8, float8, float8>::AddWithOverflow,
+          nullptr,
+          true));
 
   supported_function_[219] = std::unique_ptr<PGFuncGeneratorInterface>(
       new PGGenericFuncGenerator<float8, float8, float8>(
           219,
           "float8mi",
-          &PGArithFuncGenerator<float8, float8, float8>::SubWithOverflow));
+          &PGArithFuncGenerator<float8, float8, float8>::SubWithOverflow,
+          nullptr,
+          true));
 
   supported_function_[1088] = std::unique_ptr<PGFuncGeneratorInterface>(
       new PGIRBuilderFuncGenerator<bool, int32_t, int32_t>(
-          1088, "date_le", &IRBuilder<>::CreateICmpSLE));
+          1088, "date_le", &IRBuilder<>::CreateICmpSLE,
+          true));
 
   supported_function_[2339] = std::unique_ptr<PGFuncGeneratorInterface>(
       new PGGenericFuncGenerator<bool, int32_t, int64_t>(
           2339,
           "date_le_timestamp",
-          &PGDateFuncGenerator::DateLETimestamp));
+          &PGDateFuncGenerator::DateLETimestamp,
+          nullptr,
+          true));
+
+  supported_function_[1963] = std::unique_ptr<PGFuncGeneratorInterface>(
+      new PGGenericFuncGenerator<void*, void*, int32>(
+          1963,
+          "int4_avg_accum",
+          &PGNumericFuncGenerator::GenerateIntFloatAvgAccum<int32>,
+          nullptr,
+          true));
+
+  supported_function_[3108] = std::unique_ptr<PGFuncGeneratorInterface>(
+      new PGGenericFuncGenerator<void*, void*, float8>(
+          3108,
+          "float8_avg_accum",
+          &PGNumericFuncGenerator::GenerateIntFloatAvgAccum<float8>,
+          nullptr,
+          true));
+
+  supported_function_[6009] = std::unique_ptr<PGFuncGeneratorInterface>(
+      new PGGenericFuncGenerator<void*, void*, void*>(
+          6009,
+          "int8_avg_amalg",
+          &PGNumericFuncGenerator::GenerateIntFloatAvgAmalg,
+          nullptr,
+          true));
+
+  supported_function_[3111] = std::unique_ptr<PGFuncGeneratorInterface>(
+      new PGGenericFuncGenerator<void*, void*, void*>(
+          3111,
+          "float8_avg_amalg",
+          &PGNumericFuncGenerator::GenerateIntFloatAvgAmalg,
+          nullptr,
+          true));
 }
 
 PGFuncGeneratorInterface* OpExprTreeGenerator::GetPGFuncGenerator(
@@ -202,12 +263,13 @@ bool OpExprTreeGenerator::VerifyAndCreateExprTree(
 
 bool OpExprTreeGenerator::GenerateCode(GpCodegenUtils* codegen_utils,
                                        const ExprTreeGeneratorInfo& gen_info,
-                                       llvm::Value* llvm_isnull_ptr,
-                                       llvm::Value** llvm_out_value) {
+                                       llvm::Value** llvm_out_value,
+                                       llvm::Value* const llvm_isnull_ptr) {
   assert(nullptr != llvm_out_value);
   *llvm_out_value = nullptr;
   OpExpr* op_expr = reinterpret_cast<OpExpr*>(expr_state()->expr);
   CodeGenFuncMap::iterator itr =  supported_function_.find(op_expr->opfuncid);
+  auto irb = codegen_utils->ir_builder();
 
   if (itr == supported_function_.end()) {
     // Operators are stored in pg_proc table.
@@ -227,24 +289,35 @@ bool OpExprTreeGenerator::GenerateCode(GpCodegenUtils* codegen_utils,
   }
   bool arg_generated = true;
   std::vector<llvm::Value*> llvm_arguments;
+  std::vector<llvm::Value*> llvm_arguments_isNull;
   for (auto& arg : arguments_) {
+    llvm::Value* llvm_arg_isnull_ptr = irb->CreateAlloca(
+        codegen_utils->GetType<bool>(), nullptr, "isNull");
+    irb->CreateStore(codegen_utils->GetConstant<bool>(false),
+                     llvm_arg_isnull_ptr);
+
     llvm::Value* llvm_arg = nullptr;
     arg_generated &= arg->GenerateCode(codegen_utils,
                                        gen_info,
-                                       llvm_isnull_ptr,
-                                       &llvm_arg);
+                                       &llvm_arg,
+                                       llvm_arg_isnull_ptr);
     if (!arg_generated) {
       return false;
     }
     llvm_arguments.push_back(llvm_arg);
+    llvm_arguments_isNull.push_back(irb->CreateLoad(llvm_arg_isnull_ptr));
   }
   llvm::Value* llvm_op_value = nullptr;
   PGFuncGeneratorInfo pg_func_info(gen_info.llvm_main_func,
                                    gen_info.llvm_error_block,
-                                   llvm_arguments);
+                                   llvm_arguments,
+                                   llvm_arguments_isNull);
+
   bool retval = pg_func_interface->GenerateCode(codegen_utils,
                                                 pg_func_info,
-                                                &llvm_op_value);
+                                                &llvm_op_value,
+                                                llvm_isnull_ptr);
+
   // convert return type to Datum
   *llvm_out_value = codegen_utils->CreateCppTypeToDatumCast(llvm_op_value);
   return retval;

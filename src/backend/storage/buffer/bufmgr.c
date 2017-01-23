@@ -89,8 +89,7 @@ static volatile BufferDesc *PinCountWaitBuf = NULL;
 
 static Buffer ReadBuffer_common(SMgrRelation reln, bool isLocalBuf,
 				  bool isTemp, BlockNumber blockNum, bool zeroPage,
-				  BufferAccessStrategy strategy,
-				  const char *relErrMsgString, bool *pHit);
+				  BufferAccessStrategy strategy, bool *pHit);
 static bool PinBuffer(volatile BufferDesc *buf, BufferAccessStrategy strategy);
 static void PinBuffer_Locked(volatile BufferDesc *buf);
 static void UnpinBuffer(volatile BufferDesc *buf, bool fixOwner);
@@ -194,7 +193,6 @@ ReadBuffer(Relation reln, BlockNumber blockNum)
 									 blockNum,
 									 false, /* zeroPage */
 									 NULL, /* strategy */
-									 RelationGetRelationName(reln),
 									 &isHit);
 
 	if (isHit)
@@ -207,7 +205,7 @@ ReadBuffer(Relation reln, BlockNumber blockNum)
  * Read Buffer for pages to be Resynced
  */
 Buffer
-ReadBuffer_Resync(SMgrRelation reln, BlockNumber blockNum, const char *relidstr)
+ReadBuffer_Resync(SMgrRelation reln, BlockNumber blockNum)
 {
 	bool		isHit;
 
@@ -217,7 +215,6 @@ ReadBuffer_Resync(SMgrRelation reln, BlockNumber blockNum, const char *relidstr)
 							 blockNum,
 							 false, /* zeroPage */
 							 NULL,	/* strategy */
-							 relidstr,
 							 &isHit);
 }
 
@@ -243,7 +240,6 @@ ReadBuffer_common(SMgrRelation reln,
 				  BlockNumber blockNum,
 				  bool zeroPage,
 				  BufferAccessStrategy strategy,
-				  const char *relErrMsgString,
 				  bool *pHit)
 {
 		//MIRROREDLOCK_BUFMGR_DECLARE;
@@ -322,8 +318,8 @@ ReadBuffer_common(SMgrRelation reln,
 		bufBlock = isLocalBuf ? LocalBufHdrGetBlock(bufHdr) : BufHdrGetBlock(bufHdr);
 		if (!PageIsNew((PageHeader) bufBlock))
 			ereport(ERROR,
-					(errmsg("unexpected data beyond EOF in block %u of relation \"%s\"",
-							blockNum, relErrMsgString),
+					(errmsg("unexpected data beyond EOF in block %u of relation %s",
+							blockNum, relpath(reln->smgr_rnode)),
 					 errhint("This has been seen to occur with buggy kernels; consider updating your system.")));
 
 		/*
@@ -335,7 +331,7 @@ ReadBuffer_common(SMgrRelation reln,
 		if (isLocalBuf)
 		{
 			/* Only need to adjust flags */
-			Assert((bufHdr)->flags & BM_VALID);
+			Assert(bufHdr->flags & BM_VALID);
 			bufHdr->flags &= ~BM_VALID;
 		}
 		else
@@ -397,15 +393,15 @@ ReadBuffer_common(SMgrRelation reln,
 			{
 				ereport(WARNING,
 						(errcode(ERRCODE_DATA_CORRUPTED),
-						 errmsg("invalid page header in block %u of relation \"%s\"; zeroing out page",
-								blockNum, relErrMsgString)));
+						 errmsg("invalid page header in block %u of relation %s; zeroing out page",
+								blockNum, relpath(reln->smgr_rnode))));
 				MemSet((char *) bufBlock, 0, BLCKSZ);
 			}
 			else
 				ereport(ERROR,
 						(errcode(ERRCODE_DATA_CORRUPTED),
-				 errmsg("invalid page header in block %u of relation \"%s\"",
-						blockNum, relErrMsgString),
+				 errmsg("invalid page header in block %u of relation %s",
+						blockNum, relpath(reln->smgr_rnode)),
 				 errSendAlert(true)));
 		}
 	}
@@ -841,7 +837,8 @@ retry:
 		UnlockBufHdr(buf);
 		LWLockRelease(oldPartitionLock);
 		/* safety check: should definitely not be our *own* pin */
-		insist_log(PrivateRefCount[buf->buf_id] == 0, "buffer is pinned in InvalidateBuffer");
+		if (PrivateRefCount[buf->buf_id] != 0)
+			elog(ERROR, "buffer is pinned in InvalidateBuffer");
 
 		WaitIO(buf);
 		goto retry;
@@ -889,7 +886,8 @@ MarkBufferDirty(Buffer buffer)
 {
 	volatile BufferDesc *bufHdr;
 
-	insist_log(BufferIsValid(buffer), "bad buffer id: %d", buffer);
+	if (!BufferIsValid(buffer))
+		elog(ERROR, "bad buffer id: %d", buffer);
 
 	if (BufferIsLocal(buffer))
 	{
@@ -941,7 +939,6 @@ ReadBufferWithStrategy(Relation reln, BlockNumber blockNum,
 									 blockNum,
 									 false, /* zeroPage */
 									 strategy,
-									 RelationGetRelationName(reln),
 									 &isHit);
 
 	if (isHit)
@@ -979,7 +976,6 @@ ReadOrZeroBuffer(Relation reln, BlockNumber blockNum)
 									 blockNum,
 									 true, /* zeroPage */
 									 NULL, /* strategy */
-									 RelationGetRelationName(reln),
 									 &isHit);
 
 	if (isHit)
@@ -2351,7 +2347,8 @@ ReleaseBuffer(Buffer buffer)
 {
 	volatile BufferDesc *bufHdr;
 
-	insist_log(BufferIsValid(buffer), "bad buffer id: %d", buffer);
+	if (!BufferIsValid(buffer))
+		elog(ERROR, "bad buffer id: %d", buffer);
 
 	ResourceOwnerForgetBuffer(CurrentResourceOwner, buffer);
 
@@ -2424,7 +2421,8 @@ SetBufferCommitInfoNeedsSave(Buffer buffer)
 {
 	volatile BufferDesc *bufHdr;
 
-	insist_log(BufferIsValid(buffer), "bad buffer id: %d", buffer);
+	if (!BufferIsValid(buffer))
+		elog(ERROR, "bad buffer id: %d", buffer);
 
 	if (BufferIsLocal(buffer))
 	{
@@ -2514,7 +2512,7 @@ LockBuffer(Buffer buffer, int mode)
 	else if (mode == BUFFER_LOCK_EXCLUSIVE)
 		AcquireContentLock(buf, LW_EXCLUSIVE);
 	else
-		Assert(!"unrecognized buffer lock mode");
+		elog(ERROR, "unrecognized buffer lock mode: %d", mode);
 }
 
 /*
@@ -2565,15 +2563,17 @@ LockBufferForCleanup(Buffer buffer)
 	if (BufferIsLocal(buffer))
 	{
 		/* There should be exactly one pin */
-		insist_log(LocalRefCount[-buffer - 1] == 1,
-				"incorrect local pin count: %d", LocalRefCount[-buffer - 1]);
+		if (LocalRefCount[-buffer - 1] != 1)
+			elog(ERROR, "incorrect local pin count: %d",
+				 LocalRefCount[-buffer - 1]);
 		/* Nobody else to wait for */
 		return;
 	}
 
 	/* There should be exactly one local pin */
-	insist_log(PrivateRefCount[buffer - 1] == 1,
-		"incorrect local pin count: %d", PrivateRefCount[buffer - 1]);
+	if (PrivateRefCount[buffer - 1] != 1)
+		elog(ERROR, "incorrect local pin count: %d",
+			 PrivateRefCount[buffer - 1]);
 
 	bufHdr = &BufferDescriptors[buffer - 1];
 
@@ -2594,7 +2594,7 @@ LockBufferForCleanup(Buffer buffer)
 		{
 			UnlockBufHdr(bufHdr);
 			LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
-			insist_log(false, "multiple backends attempting to wait for pincount 1");
+			elog(ERROR, "multiple backends attempting to wait for pincount 1");
 		}
 		bufHdr->wait_backend_pid = MyProcPid;
 		bufHdr->flags |= BM_PIN_COUNT_WAITER;

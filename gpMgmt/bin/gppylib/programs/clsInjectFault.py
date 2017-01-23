@@ -383,6 +383,7 @@ class GpInjectFaultProgram:
 			      "transaction_abort_failure (inject fault to simulate transaction abort failure), " \
 			      "workfile_creation_failure (inject fault to simulate workfile creation failure), " \
 			      "workfile_write_failure (inject fault to simulate workfile write failure), " \
+                  "workfile_hashjoin_failure (inject fault before we close workfile in ExecHashJoinNewBatch), "\
 			      "update_committed_eof_in_persistent_table (inject fault before committed EOF is updated in gp_persistent_relation_node for Append Only segment files), " \
 			      "exec_simple_query_end_command (inject fault before EndCommand in exec_simple_query), " \
 			      "multi_exec_hash_large_vmem (allocate large vmem using palloc inside MultiExecHash to attempt to exceed vmem limit), " \
@@ -411,7 +412,12 @@ class GpInjectFaultProgram:
 			      "runaway_cleanup (inject fault before starting the cleanup for a runaway query), " \
                   "opt_task_allocate_string_buffer (inject fault while allocating string buffer), " \
                   "opt_relcache_translator_catalog_access (inject fault while translating relcache entries), " \
-                  "send_qe_details_init_backend (inject fault before sending QE details during backend initialization)" \
+			      "interconnect_stop_ack_is_lost (inject fault in interconnect to skip sending the stop ack), " \
+                  "send_qe_details_init_backend (inject fault before sending QE details during backend initialization), " \
+                  "process_startup_packet (inject fault when processing startup packet during backend initialization), " \
+                  "quickdie (inject fault when auxiliary processes quitting), " \
+                  "after_one_slice_dispatched (inject fault after one slice was dispatched when dispatching plan), " \
+                  "cursor_qe_reader_after_snapshot (inject fault after QE READER has populated snashot for cursor)" \
 			      "all (affects all faults injected, used for 'status' and 'reset'), ") 
         addTo.add_option("-c", "--ddl_statement", dest="ddlStatement", type="string",
                          metavar="ddlStatement",

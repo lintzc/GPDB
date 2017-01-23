@@ -22,6 +22,7 @@
 #include "catalog/pg_operator.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
+#include "cdb/cdbvars.h"
 #include "miscadmin.h"
 #include "parser/parse_coerce.h"
 #include "parser/parse_func.h"
@@ -37,21 +38,20 @@ static Oid lookup_agg_function(List *fnName, int nargs, Oid *input_types,
 
 
 /*
- * AggregateCreateWithOid
+ * AggregateCreate
  */
-Oid
-AggregateCreateWithOid(const char		*aggName,
-					   Oid				 aggNamespace,
-					   Oid				*aggArgTypes,
-					   int				 numArgs,
-					   List				*aggtransfnName,
-					   List				*aggprelimfnName,
-					   List				*aggfinalfnName,
-					   List				*aggsortopName,
-					   Oid				 aggTransType,
-					   const char		*agginitval,
-					   bool              aggordered,
-					   Oid				 procOid)
+void
+AggregateCreate(const char *aggName,
+				Oid aggNamespace,
+				Oid *aggArgTypes,
+				int numArgs,
+				List *aggtransfnName,
+				List *aggprelimfnName,
+				List *aggfinalfnName,
+				List *aggsortopName,
+				Oid aggTransType,
+				const char *agginitval,
+				bool aggordered)
 {
 	Relation	aggdesc;
 	HeapTuple	tup;
@@ -71,6 +71,7 @@ AggregateCreateWithOid(const char		*aggName,
 	Oid			prelimrettype;
 	Oid		   *fnArgs;
 	int			nargs_transfn;
+	Oid			procOid;
 	TupleDesc	tupDesc;
 	int			i;
 	ObjectAddress myself,
@@ -277,8 +278,7 @@ AggregateCreateWithOid(const char		*aggName,
 							  PointerGetDatum(NULL),	/* proconfig */
 							  1,				/* procost */
 							  0,				/* prorows */
-							  PRODATAACCESS_NONE,		/* prodataaccess */
-							  procOid);
+							  PRODATAACCESS_NONE);		/* prodataaccess */
 
 	/*
 	 * Okay to create the pg_aggregate entry.
@@ -373,8 +373,6 @@ AggregateCreateWithOid(const char		*aggName,
 		referenced.objectSubId = 0;
 		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 	}
-	
-	return procOid;
 }
 
 /*

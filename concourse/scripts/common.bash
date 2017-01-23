@@ -19,7 +19,7 @@ function install_gpdb() {
 }
 
 function install_sync_tools() {
-    tar -xzf sync_tools_gpdb_centos/sync_tools_gpdb.tar.gz -C gpdb_src/gpAux
+    tar -xzf sync_tools_gpdb/sync_tools_gpdb.tar.gz -C gpdb_src/gpAux
 }
 
 function configure() {
@@ -31,6 +31,7 @@ function configure() {
 
 function make_cluster() {
   source /usr/local/greenplum-db-devel/greenplum_path.sh
+  export BLDWRAP_POSTGRES_CONF_ADDONS=${BLDWRAP_POSTGRES_CONF_ADDONS}
   workaround_before_concourse_stops_stripping_suid_bits
   pushd gpdb_src/gpAux/gpdemo
       su gpadmin -c make cluster

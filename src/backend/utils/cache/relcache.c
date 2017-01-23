@@ -313,6 +313,7 @@ GpRelationNodeBeginScan(
 	Snapshot	snapshot,
 	Relation 	gp_relation_node,
 	Oid		relationId,
+	Oid 		tablespaceOid,
 	Oid 		relfilenode,
 	GpRelationNodeScan 	*gpRelationNodeScan)
 {
@@ -323,25 +324,18 @@ GpRelationNodeBeginScan(
 	/*
 	 * form a scan key
 	 */
-	/* XXX XXX: break this out -- find callers - jic 2011/12/09 */
-	/* maybe it's ok - return a cql context ? */
-
-	/* XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX */
-	/* no json defs for persistent tables ? */
-/*
-	cqxx("SELECT * FROM gp_relation_node_relfilenode "
-		 " WHERE oid = :1 ",
-		 ObjectIdGetDatum(relfilenode));
-*/
-	/* XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX */
-
 	ScanKeyInit(&gpRelationNodeScan->scankey[0],
+				Anum_gp_relation_node_tablespace_oid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(tablespaceOid));
+
+	ScanKeyInit(&gpRelationNodeScan->scankey[1],
 				Anum_gp_relation_node_relfilenode_oid,
 				BTEqualStrategyNumber, F_OIDEQ,
 				ObjectIdGetDatum(relfilenode));
 
 	/*
-	 * Open pg_class and fetch a tuple.  Force heap scan if we haven't yet
+	 * Open gp_relation_node and fetch a tuple.  Force heap scan if we haven't yet
 	 * built the critical relcache entries (this includes initdb and startup
 	 * without a pg_internal.init file).  The caller can also force a heap
 	 * scan by setting indexOK == false.
@@ -350,11 +344,12 @@ GpRelationNodeBeginScan(
 		systable_beginscan(gp_relation_node, GpRelationNodeOidIndexId,
 						   /* indexOK */ true,
 						   snapshot,
-						   /* nKeys */ 1, 
+						   /* nKeys */ 2,
 						   gpRelationNodeScan->scankey);
 
 	gpRelationNodeScan->gp_relation_node = gp_relation_node;
 	gpRelationNodeScan->relationId = relationId;
+	gpRelationNodeScan->tablespaceOid = tablespaceOid;
 	gpRelationNodeScan->relfilenode = relfilenode;
 }
 
@@ -397,8 +392,9 @@ GpRelationNodeGetNext(
 						persistentSerialNum);
 	if (actualRelationNode != gpRelationNodeScan->relfilenode)
 		elog(FATAL, "Index on gp_relation_node broken."
-			   "Mismatch in node tuple for gp_relation_node for relation %u, relfilenode %u, relation node %u",
-			 gpRelationNodeScan->relationId, 
+			   "Mismatch in node tuple for gp_relation_node for relation %u, tablespace %u, relfilenode %u, relation node %u",
+			 gpRelationNodeScan->relationId,
+			 gpRelationNodeScan->tablespaceOid,
 			 gpRelationNodeScan->relfilenode,
 			 actualRelationNode);
 
@@ -417,40 +413,35 @@ GpRelationNodeEndScan(
 static HeapTuple
 ScanGpRelationNodeTuple(
 	Relation 	gp_relation_node,
+	Oid 		tablespaceOid,
 	Oid 		relfilenode,
 	int32		segmentFileNum)
 {
 	HeapTuple	tuple;
 	SysScanDesc scan;
-	ScanKeyData key[2];
+	ScanKeyData key[3];
 
+	Assert (tablespaceOid != MyDatabaseTableSpace);
 	Assert (relfilenode != 0);
 
 	/*
 	 * form a scan key
 	 */
-
-	/* XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX */
-/*
-	cqxx("SELECT * FROM gp_relation_node "
-		 " WHERE relfilenode_oid = :1 "
-		 " AND segment_file_num = :2 ",
-		 ObjectIdGetDatum(relfilenode),
-		 Int32GetDatum(segmentFileNum));
-*/
-	/* XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX */
-
 	ScanKeyInit(&key[0],
+				Anum_gp_relation_node_tablespace_oid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(tablespaceOid));
+	ScanKeyInit(&key[1],
 				Anum_gp_relation_node_relfilenode_oid,
 				BTEqualStrategyNumber, F_OIDEQ,
 				ObjectIdGetDatum(relfilenode));
-	ScanKeyInit(&key[1],
+	ScanKeyInit(&key[2],
 				Anum_gp_relation_node_segment_file_num,
 				BTEqualStrategyNumber, F_INT4EQ,
 				Int32GetDatum(segmentFileNum));
 
 	/*
-	 * Open pg_class and fetch a tuple.  Force heap scan if we haven't yet
+	 * Open gp_relation_node and fetch a tuple.  Force heap scan if we haven't yet
 	 * built the critical relcache entries (this includes initdb and startup
 	 * without a pg_internal.init file).  The caller can also force a heap
 	 * scan by setting indexOK == false.
@@ -458,7 +449,7 @@ ScanGpRelationNodeTuple(
 	scan = systable_beginscan(gp_relation_node, GpRelationNodeOidIndexId,
 									   /* indexOK */ true,
 									   SnapshotNow,
-									   2, key);
+									   3, key);
 
 	tuple = systable_getnext(scan);
 
@@ -477,6 +468,7 @@ ScanGpRelationNodeTuple(
 HeapTuple
 FetchGpRelationNodeTuple(
 	Relation 		gp_relation_node,
+	Oid 			tablespaceOid,
 	Oid 			relfilenode,
 	int32			segmentFileNum,
 	ItemPointer		persistentTid,
@@ -492,10 +484,16 @@ FetchGpRelationNodeTuple(
 
 	int64 createMirrorDataLossTrackingSessionNum;
 
+	/*
+	 * gp_relation_node stores tablespaceOId in pg_class fashion, hence need
+	 * to fetch the similar way.
+	 */
+	Assert (tablespaceOid != MyDatabaseTableSpace);
 	Assert (relfilenode != 0);
 	
 	tuple = ScanGpRelationNodeTuple(
 					gp_relation_node,
+					tablespaceOid,
 					relfilenode,
 					segmentFileNum);
 	
@@ -547,14 +545,16 @@ DeleteGpRelationNodeTuple(
 	gp_relation_node = heap_open(GpRelationNodeRelationId, RowExclusiveLock);
 
 	tuple = FetchGpRelationNodeTuple(gp_relation_node,
-				relation->rd_rel->relfilenode,
-				segmentFileNum,
-				&persistentTid,
-				&persistentSerialNum);
+									 relation->rd_rel->reltablespace,
+									 relation->rd_rel->relfilenode,
+									 segmentFileNum,
+									 &persistentTid,
+									 &persistentSerialNum);
 
 	if (!HeapTupleIsValid(tuple))
-		elog(ERROR, "could not find node tuple for relation %u, relation file node %u, segment file #%d",
+		elog(ERROR, "could not find node tuple for relation %u, tablespace %u, relation file node %u, segment file #%d",
 			 RelationGetRelid(relation),
+			 relation->rd_rel->reltablespace,
 			 relation->rd_rel->relfilenode,
 			 segmentFileNum);
 
@@ -567,12 +567,10 @@ DeleteGpRelationNodeTuple(
 
 bool
 ReadGpRelationNode(
+	Oid 			tablespaceOid,
 	Oid 			relfilenode,
-	
 	int32			segmentFileNum,
-
 	ItemPointer		persistentTid,
-
 	int64			*persistentSerialNum)
 {
 	Relation gp_relation_node;
@@ -586,6 +584,7 @@ ReadGpRelationNode(
 
 	tuple = FetchGpRelationNodeTuple(
 						gp_relation_node,
+						tablespaceOid,
 						relfilenode,
 						segmentFileNum,
 						persistentTid,
@@ -611,7 +610,8 @@ ReadGpRelationNode(
 			tupleVisibilitySummaryString = GetTupleVisibilitySummaryString(&tupleVisibilitySummary);
 			
 			elog(Persistent_DebugPrintLevel(), 
-				 "ReadGpRelationNode: For relfilenode %u, segment file #%d found persistent serial number " INT64_FORMAT ", TID %s (gp_relation_node tuple visibility: %s)",
+				 "ReadGpRelationNode: For tablespace %u relfilenode %u, segment file #%d found persistent serial number " INT64_FORMAT ", TID %s (gp_relation_node tuple visibility: %s)",
+				 tablespaceOid,
 				 relfilenode,
 				 segmentFileNum,
 				 *persistentSerialNum,
@@ -647,15 +647,17 @@ RelationFetchSegFile0GpRelationNode(
 		}
 
 		if (!ReadGpRelationNode(
-					relation->rd_node.relNode,
-					/* segmentFileNum */ 0,
-					&relation->rd_segfile0_relationnodeinfo.persistentTid,
-					&relation->rd_segfile0_relationnodeinfo.persistentSerialNum))
+				relation->rd_rel->reltablespace,
+				relation->rd_rel->relfilenode,
+				/* segmentFileNum */ 0,
+				&relation->rd_segfile0_relationnodeinfo.persistentTid,
+				&relation->rd_segfile0_relationnodeinfo.persistentSerialNum))
 		{
-			elog(ERROR, "Did not find gp_relation_node entry for relation name %s, relation id %u, relfilenode %u",
+			elog(ERROR, "Did not find gp_relation_node entry for relation name %s, relation id %u, tablespaceOid %u, relfilenode %u",
 				 relation->rd_rel->relname.data,
 				 relation->rd_id,
-				 relation->rd_node.relNode);
+				 relation->rd_rel->reltablespace,
+				 relation->rd_rel->relfilenode);
 		}
 
 		Assert(!Persistent_BeforePersistenceWork());
@@ -686,15 +688,19 @@ RelationFetchSegFile0GpRelationNode(
 		int64			persistentSerialNum;
 
 		if (!ReadGpRelationNode(
-					relation->rd_node.relNode,
-					/* segmentFileNum */ 0,
-					&persistentTid,
-					&persistentSerialNum))
+				relation->rd_rel->reltablespace,
+				relation->rd_rel->relfilenode,
+				/* segmentFileNum */ 0,
+				&persistentTid,
+				&persistentSerialNum))
 		{
 			elog(ERROR,
 				 "did not find gp_relation_node entry for relation name %s, "
-				 "relation id %u, relfilenode %u", relation->rd_rel->relname.data,
-				 relation->rd_id, relation->rd_node.relNode);
+				 "relation id %u, tablespace %u, relfilenode %u",
+				 relation->rd_rel->relname.data,
+				 relation->rd_id,
+				 relation->rd_rel->reltablespace,
+				 relation->rd_rel->relfilenode);
 		}
 
 		if (ItemPointerCompare(&persistentTid,
@@ -1353,17 +1359,17 @@ RelationBuildDesc(Oid targetRelId, bool insertIt)
 	relation->rd_istemp = isTempOrToastNamespace(relation->rd_rel->relnamespace);
 	relation->rd_issyscat = (strncmp(relation->rd_rel->relname.data, "pg_", 3) == 0);
 
-    /*
-     * CDB: On QEs, temp relations must use shared buffer cache so data
-     * will be visible to all segmates.  On QD, sequence objects must
-     * use shared buffer cache so data will be visible to sequence server.
-     */
-    if (relation->rd_istemp &&
-        relation->rd_rel->relkind != RELKIND_SEQUENCE &&
-        Gp_role != GP_ROLE_EXECUTE)
-        relation->rd_isLocalBuf = true;
-    else
-        relation->rd_isLocalBuf = false;
+	/*
+	 * CDB: On QEs, temp relations must use shared buffer cache so data
+	 * will be visible to all segmates.  On QD, sequence objects must
+	 * use shared buffer cache so data will be visible to sequence server.
+	 */
+	if (relation->rd_istemp &&
+		relation->rd_rel->relkind != RELKIND_SEQUENCE &&
+		Gp_role != GP_ROLE_EXECUTE)
+		relation->rd_isLocalBuf = true;
+	else
+		relation->rd_isLocalBuf = false;
 
 	/*
 	 * initialize the tuple descriptor (relation->rd_att).
@@ -3064,6 +3070,7 @@ RelationBuildLocalRelation(const char *relname,
 	int			i;
 	bool		has_not_null;
 	bool		nailit;
+	Oid			relfilenode;
 
 	AssertArg(natts >= 0);
 
@@ -3135,17 +3142,17 @@ RelationBuildLocalRelation(const char *relname,
 	/* is it a system catalog? */
 	rel->rd_issyscat = (strncmp(relname, "pg_", 3) == 0);
 
-    /*
-     * CDB: On QEs, temp relations must use shared buffer cache so data
-     * will be visible to all segmates.  On QD, sequence objects must
-     * use shared buffer cache so data will be visible to sequence server.
-     */
-    if (rel->rd_istemp &&
-        relkind != RELKIND_SEQUENCE &&
-        Gp_role != GP_ROLE_EXECUTE)
-        rel->rd_isLocalBuf = true;
-    else
-        rel->rd_isLocalBuf = false;
+	/*
+	 * CDB: On QEs, temp relations must use shared buffer cache so data
+	 * will be visible to all segmates.  On QD, sequence objects must
+	 * use shared buffer cache so data will be visible to sequence server.
+	 */
+	if (rel->rd_istemp &&
+		relkind != RELKIND_SEQUENCE &&
+		Gp_role != GP_ROLE_EXECUTE)
+		rel->rd_isLocalBuf = true;
+	else
+		rel->rd_isLocalBuf = false;
 
 	/*
 	 * create a new tuple descriptor from the one passed in.  We do this
@@ -3196,8 +3203,12 @@ RelationBuildLocalRelation(const char *relname,
 
 	/*
 	 * Insert relation physical and logical identifiers (OIDs) into the right
-	 * places.	Note that the physical ID (relfilenode) is initially the same
-	 * as the logical ID (OID).
+	 * places.
+	 *
+	 * In PostgreSQL, the physical ID (relfilenode) is initially the same
+	 * as the logical ID (OID). In GPDB, the table's logical OID is allocated
+	 * in the master, and might already be in use as a relfilenode of an
+	 * existing relation in a segment.
 	 */
 	rel->rd_rel->relisshared = shared_relation;
 
@@ -3206,7 +3217,18 @@ RelationBuildLocalRelation(const char *relname,
 	for (i = 0; i < natts; i++)
 		rel->rd_att->attrs[i]->attrelid = relid;
 
-	rel->rd_rel->relfilenode = relid;
+	if (Gp_role != GP_ROLE_EXECUTE ||
+		CheckNewRelFileNodeIsOk(relid, reltablespace, shared_relation))
+	{
+		relfilenode = relid;
+	}
+	else
+	{
+		/* FIXME: should we pass pg_class here? */
+		relfilenode = GetNewRelFileNode(reltablespace, shared_relation, NULL);
+	}
+	rel->rd_rel->relfilenode = relfilenode;
+
 	rel->rd_rel->reltablespace = reltablespace;
 
 	RelationInitLockInfo(rel);	/* see lmgr.c */
@@ -3413,14 +3435,14 @@ RelationCacheInitializePhase3(void)
 							AttributeRelationId);
 		load_critical_index(IndexRelidIndexId,
 							IndexRelationId);
-		load_critical_index(OpclassOidIndexId,
-							OperatorClassRelationId);
 		load_critical_index(AccessMethodStrategyIndexId,
 							AccessMethodOperatorRelationId);
 		load_critical_index(OpclassOidIndexId,
 							OperatorClassRelationId);
 		load_critical_index(AccessMethodProcedureIndexId,
 							AccessMethodProcedureRelationId);
+		load_critical_index(OperatorOidIndexId,
+							OperatorRelationId);
 		load_critical_index(RewriteRelRulenameIndexId,
 							RewriteRelationId);
 		load_critical_index(TriggerRelidNameIndexId,

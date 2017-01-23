@@ -50,7 +50,7 @@
 
 #ifdef USE_ORCA
 extern char *SzDXLPlan(Query *parse);
-extern StringInfo OptVersion();
+extern const char *OptVersion();
 #endif
 
 
@@ -680,10 +680,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, ParamListInfo params,
     	}
     	else /* PLANGEN_OPTIMIZER */
     	{
-    		StringInfo str = OptVersion();
-			appendStringInfo(&buf, "PQO version %s\n", str->data);
-			pfree(str->data);
-			pfree(str);
+			appendStringInfo(&buf, "PQO version %s\n", OptVersion());
     	}
     }
 #endif
@@ -2187,15 +2184,14 @@ show_motion_keys(Plan *plan, List *hashExpr, int nkeys, AttrNumber *keycols,
 			     const char *qlabel,
                  StringInfo str, int indent, ExplainState *es)
 {
-    List	   *context;
-    char	   *exprstr;
-    bool		useprefix = list_length(es->rtable) > 1;
-    int			keyno;
-    int			i;
+	List	   *context;
+	char	   *exprstr;
+	bool		useprefix = list_length(es->rtable) > 1;
+	int			keyno;
+	int			i;
 
-    if (!nkeys &&
-        !hashExpr)
-        return;
+	if (!nkeys && !hashExpr)
+		return;
 
 	/* Set up deparse context */
 	context = deparse_context_for_plan((Node *) outerPlan(plan),
@@ -2300,7 +2296,9 @@ show_sort_info(SortState *sortstate,
 {
 	Assert(IsA(sortstate, SortState));
 	if (es->printAnalyze && sortstate->sort_Done &&
-		sortstate->tuplesortstate != NULL)
+		sortstate->tuplesortstate != NULL &&
+		(gp_enable_mk_sort ?
+		 (void *) sortstate->tuplesortstate->sortstore_mk : (void *) sortstate->tuplesortstate->sortstore) != NULL)
 	{
 		char	   *sortinfo;
 		int			i;

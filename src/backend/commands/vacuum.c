@@ -194,20 +194,6 @@ typedef struct AppendOnlyIndexVacuumState
 	AppendOnlyBlockDirectoryEntry blockDirectoryEntry;
 } AppendOnlyIndexVacuumState;
 
-/*
- * Currently, vacuuming on a relation with a bitmap index is done through
- * reindex. We need to pass down OIDs to ensure that all segments use
- * the same set of OIDs. In some situations, such as vacuuming a table with
- * lots of deleted tuples and vacuum full, reindex may be called multiple
- * times. We can not really tell how many time reindex will be called
- * in advance. Here we set the maxmimal number of oids to be passed down
- * to QEs. If any more is needed, the vacuum will fail with an error.
- *
- * Note that each reindex requires 3 OIDs, so this number should be a multiply
- * of 3.
- */
-#define NUM_EXTRA_OIDS_FOR_BITMAP (3 * 10)
-
 static void
 ExecContext_Init(ExecContext ec, Relation rel)
 {
@@ -270,8 +256,7 @@ static int VacFullInitialStatsSize = 0;
 static BufferAccessStrategy vac_strategy;
 
 /* non-export function prototypes */
-static List *get_rel_oids(List *relids, const RangeVar *vacrel,
-			 const char *stmttype, bool rootonly);
+static List *get_rel_oids(List *relids, VacuumStmt *vacstmt, bool isVacuum);
 static void vac_truncate_clog(TransactionId frozenXID);
 static void vacuum_rel(Relation onerel, VacuumStmt *vacstmt, LOCKMODE lmode, List *updated_stats,
 		   bool for_wraparound);
@@ -283,7 +268,7 @@ static void scan_heap(VRelStats *vacrelstats, Relation onerel,
 static bool repair_frag(VRelStats *vacrelstats, Relation onerel,
 			VacPageList vacuum_pages, VacPageList fraged_pages,
 						int nindexes, Relation *Irel, List *updated_stats,
-						List *all_extra_oids, int reindex_count);
+						int reindex_count);
 static void move_chain_tuple(Relation rel,
 				 Buffer old_buf, Page old_page, HeapTuple old_tup,
 				 Buffer dst_buf, Page dst_page, VacPage dst_vacpage,
@@ -297,7 +282,7 @@ static void vacuum_heap(VRelStats *vacrelstats, Relation onerel,
 static void vacuum_page(Relation onerel, Buffer buffer, VacPage vacpage);
 static void vacuum_index(VacPageList vacpagelist, Relation indrel,
 						 double num_tuples, int keep_tuples, List *updated_stats,
-						 List *extra_oids, bool check_stats);
+						 bool check_stats);
 static void scan_index(Relation indrel, double num_tuples, List *updated_stats, bool isfull,
 			bool check_stats);
 static bool tid_reaped(ItemPointer itemptr, void *state);
@@ -329,7 +314,7 @@ vacuum_combine_stats(VacuumStatsContext *stats_context,
 
 static void vacuum_appendonly_index(Relation indexRelation,
 		AppendOnlyIndexVacuumState *vacuumIndexState,
-		List *extra_oids, List* updated_stats, double rel_tuple_count, bool isfull);
+		List* updated_stats, double rel_tuple_count, bool isfull);
 
 /****************************************************************************
  *																			*
@@ -366,7 +351,8 @@ vacuum(VacuumStmt *vacstmt, List *relids,
 	volatile bool all_rels,
 				in_outer_xact,
 				use_own_xacts;
-	List	   *relations;
+	List	   *vacuum_relations;
+	List	   *analyze_relations;
 
 	if (vacstmt->vacuum && vacstmt->rootonly)
 		ereport(ERROR,
@@ -442,8 +428,17 @@ vacuum(VacuumStmt *vacstmt, List *relids,
 	/*
 	 * Build list of relations to process, unless caller gave us one. (If we
 	 * build one, we put it in vac_context for safekeeping.)
+	 * Analyze on midlevel partition is not allowed directly so vacuum_relations
+	 * and analyze_relations may be different.
+	 * In case of partitioned tables, vacuum_relation will contain all OIDs of the
+	 * partitions of a partitioned table. However, analyze_relation will contain all the OIDs
+	 * of partition of a partitioned table except midlevel partition unless
+	 * GUC optimizer_analyze_midlevel_partition is set to on.
 	 */
-	relations = get_rel_oids(relids, vacstmt->relation, stmttype, vacstmt->rootonly);
+	if (vacstmt->vacuum)
+		vacuum_relations = get_rel_oids(relids, vacstmt, true /* Requesting relations for VACUUM */);
+	if (vacstmt->analyze)
+		analyze_relations = get_rel_oids(relids, vacstmt, false /* Requesting relations for ANALYZE */);
 
 	/*
 	 * Decide whether we need to start/commit our own transactions.
@@ -468,7 +463,7 @@ vacuum(VacuumStmt *vacstmt, List *relids,
 			use_own_xacts = true;
 		else if (in_outer_xact)
 			use_own_xacts = false;
-		else if (list_length(relations) > 1)
+		else if (list_length(analyze_relations) > 1)
 			use_own_xacts = true;
 		else
 			use_own_xacts = false;
@@ -516,18 +511,36 @@ vacuum(VacuumStmt *vacstmt, List *relids,
 			vacstmt->appendonly_relation_empty = false;
 		}
 
-		/*
-		 * Loop to process each selected relation.
-		 */
-		foreach(cur, relations)
+		if (vacstmt->vacuum)
 		{
-			Oid			relid = lfirst_oid(cur);
-
-			if (vacstmt->vacuum)
-				vacuumStatement_Relation(vacstmt, relid, relations, bstrategy, for_wraparound, isTopLevel);
-
-			if (vacstmt->analyze)
+			/*
+			 * Loop to process each selected relation which needs to be vacuumed.
+			 */
+			foreach(cur, vacuum_relations)
 			{
+				Oid			relid = lfirst_oid(cur);
+				vacuumStatement_Relation(vacstmt, relid, vacuum_relations, bstrategy, for_wraparound, isTopLevel);
+			}
+		}
+
+		if (vacstmt->analyze)
+		{
+			/*
+			 * If there are no partition tables in the database and ANALYZE ROOTPARTITION ALL
+			 * is executed report a WARNING as no root partitions are there to be analyzed
+			 */
+			if (vacstmt->rootonly && NIL == analyze_relations && !vacstmt->relation)
+			{
+				ereport(NOTICE,
+						(errmsg("there are no partitioned tables in database to ANALYZE ROOTPARTITION")));
+			}
+
+			/*
+			 * Loop to process each selected relation which needs to be analyzed.
+			 */
+			foreach(cur, analyze_relations)
+			{
+				Oid			relid = lfirst_oid(cur);
 				MemoryContext old_context = NULL;
 
 				/*
@@ -1205,22 +1218,35 @@ vacuumStatement_Relation(VacuumStmt *vacstmt, Oid relid,
 		 */
 		if (Gp_role == GP_ROLE_DISPATCH)
 		{
+			int 		i, nindexes;
+			bool 		has_bitmap = false;
+			Relation   *i_rel = NULL;
+
 			stats_context.ctx = vac_context;
 			stats_context.onerel = onerel;
 			stats_context.updated_stats = NIL;
 			stats_context.vac_stats = NULL;
 
-			/* Generate extra oids for relfilenodes to be used in
-			 * bitmap indexes if any. */
-			gen_oids_for_bitmaps(vacstmt, onerel);
+			vac_open_indexes(onerel, AccessShareLock, &nindexes, &i_rel);
+			if (i_rel != NULL)
+			{
+				for (i = 0; i < nindexes; i++)
+				{
+					if (RelationIsBitmapIndex(i_rel[i]))
+					{
+						has_bitmap = true;
+						break;
+					}
+				}
+			}
+			vac_close_indexes(nindexes, i_rel, AccessShareLock);
 
 			/*
-			 * We have to acquire a ShareLock for the relation
-			 * which has bitmap indexes, since reindex is used
-			 * later. Otherwise, concurrent vacuum and insert may
-			 * cause deadlock, see MPP-5960.
+			 * We have to acquire a ShareLock for the relation which has bitmap
+			 * indexes, since reindex is used later. Otherwise, concurrent
+			 * vacuum and inserts may cause deadlock. MPP-5960
 			 */
-			if (vacstmt->extra_oids != NULL)
+			if (has_bitmap)
 				LockRelation(onerel, ShareLock);
 
 			dispatchVacuum(vacstmt, &stats_context);
@@ -1257,8 +1283,6 @@ vacuumStatement_Relation(VacuumStmt *vacstmt, Oid relid,
 		{
 			list_free_deep(stats_context.updated_stats);
 			stats_context.updated_stats = NIL;
-			list_free(vacstmt->extra_oids);
-			vacstmt->extra_oids = NIL;
 
 			/*
 			 * Update ao master tupcount the hard way after the compaction and
@@ -1377,8 +1401,7 @@ vacuumStatement_Relation(VacuumStmt *vacstmt, Oid relid,
  * per-relation transactions.
  */
 static List *
-get_rel_oids(List *relids, const RangeVar *vacrel, const char *stmttype,
-			 bool rootonly)
+get_rel_oids(List *relids, VacuumStmt *vacstmt, bool isVacuum)
 {
 	List	   *oid_list = NIL;
 	MemoryContext oldcontext;
@@ -1387,33 +1410,88 @@ get_rel_oids(List *relids, const RangeVar *vacrel, const char *stmttype,
 	if (relids)
 		return relids;
 
-	if (vacrel)
+	if (vacstmt->relation)
 	{
-		/* Process a specific relation */
-		Oid			relid;
-		List	   *prels = NIL;
-
-		relid = RangeVarGetRelid(vacrel, false);
-
-		if (rel_is_partitioned(relid))
+		if (isVacuum)
 		{
-			PartitionNode *pn;
+			/* Process a specific relation */
+			Oid			relid;
+			List	   *prels = NIL;
 
-			pn = get_parts(relid, 0, 0, false, true /*includesubparts*/);
+			relid = RangeVarGetRelid(vacstmt->relation, false);
 
-			prels = all_partition_relids(pn);
+			if (rel_is_partitioned(relid))
+			{
+				PartitionNode *pn;
+
+				pn = get_parts(relid, 0, 0, false, true /*includesubparts*/);
+
+				prels = all_partition_relids(pn);
+			}
+			else if (rel_is_child_partition(relid))
+			{
+				/* get my children */
+				prels = find_all_inheritors(relid);
+			}
+
+			/* Make a relation list entry for this relation */
+			oldcontext = MemoryContextSwitchTo(vac_context);
+			oid_list = lappend_oid(oid_list, relid);
+			oid_list = list_concat_unique_oid(oid_list, prels);
+			MemoryContextSwitchTo(oldcontext);
 		}
-		else if (rel_is_child_partition(relid))
+		else
 		{
-			/* get my children */
-			prels = find_all_inheritors(relid);
-		}
+			oldcontext = MemoryContextSwitchTo(vac_context);
+			/**
+			 * ANALYZE one relation (optionally, a list of columns).
+			 */
+			Oid relationOid = InvalidOid;
 
-		/* Make a relation list entry for this guy */
-		oldcontext = MemoryContextSwitchTo(vac_context);
-		oid_list = lappend_oid(oid_list, relid);
-		oid_list = list_concat_unique_oid(oid_list, prels);
-		MemoryContextSwitchTo(oldcontext);
+			relationOid = RangeVarGetRelid(vacstmt->relation, false);
+			PartStatus ps = rel_part_status(relationOid);
+
+			if (ps != PART_STATUS_ROOT && vacstmt->rootonly)
+			{
+				ereport(WARNING,
+						(errmsg("skipping \"%s\" --- cannot analyze a non-root partition using ANALYZE ROOTPARTITION",
+								get_rel_name(relationOid))));
+			}
+			else if (ps == PART_STATUS_ROOT)
+			{
+				PartitionNode *pn = get_parts(relationOid, 0 /*level*/ ,
+											  0 /*parent*/, false /* inctemplate */, true /*includesubparts*/);
+				Assert(pn);
+				if (!vacstmt->rootonly)
+				{
+					oid_list = all_leaf_partition_relids(pn); /* all leaves */
+				}
+				oid_list = lappend_oid(oid_list, relationOid); /* root partition */
+				if (optimizer_analyze_midlevel_partition)
+				{
+					oid_list = list_concat(oid_list, all_interior_partition_relids(pn)); /* interior partitions */
+				}
+			}
+			else if (ps == PART_STATUS_INTERIOR) /* analyze an interior partition directly */
+			{
+				/* disable analyzing mid-level partitions directly since the users are encouraged
+				 * to work with the root partition only. To gather stats on mid-level partitions
+				 * (for Orca's use), the user should run ANALYZE or ANALYZE ROOTPARTITION on the
+				 * root level with optimizer_analyze_midlevel_partition GUC set to ON.
+				 * Planner uses the stats on leaf partitions, so its unnecesary to collect stats on
+				 * midlevel partitions.
+				 */
+				ereport(WARNING,
+						(errmsg("skipping \"%s\" --- cannot analyze a mid-level partition. "
+								"Please run ANALYZE on the root partition table.",
+								get_rel_name(relationOid))));
+			}
+			else
+			{
+				oid_list = list_make1_oid(relationOid);
+			}
+			MemoryContextSwitchTo(oldcontext);
+		}
 	}
 	else
 	{
@@ -1422,6 +1500,7 @@ get_rel_oids(List *relids, const RangeVar *vacrel, const char *stmttype,
 		HeapScanDesc scan;
 		HeapTuple	tuple;
 		ScanKeyData key;
+		Oid candidateOid;
 
 		ScanKeyInit(&key,
 					Anum_pg_class_relkind,
@@ -1448,19 +1527,26 @@ get_rel_oids(List *relids, const RangeVar *vacrel, const char *stmttype,
 					classForm->relstorage == RELSTORAGE_VIRTUAL))
 				continue;
 
-			/* Skip persistent tables. Vacuum lazy is harmless, but also no
-			 * benefit to perform. Vacuum full could turn out dangerous as it
-			 * has potential to move tuples around causing the TIDs for tuples
-			 * to change, which violates its reference from
+			/* Skip persistent tables for Vacuum full. Vacuum full could turn
+			 * out dangerous as it has potential to move tuples around causing
+			 * the TIDs for tuples to change, which violates its reference from
 			 * gp_relation_node. One scenario where this can happen is zero-page
 			 * due to failure after page extension but before page initialization.
 			 */
-			 if (GpPersistent_IsPersistentRelation(HeapTupleGetOid(tuple)))
-				 continue;
+			if (vacstmt->full &&
+				GpPersistent_IsPersistentRelation(HeapTupleGetOid(tuple)))
+				continue;
 
 			/* Make a relation list entry for this guy */
+			candidateOid = HeapTupleGetOid(tuple);
+
+			/* Skip non root partition tables if ANALYZE ROOTPARTITION ALL is executed */
+			if (vacstmt->rootonly && !rel_is_partitioned(candidateOid))
+			{
+				continue;
+			}
 			oldcontext = MemoryContextSwitchTo(vac_context);
-			oid_list = lappend_oid(oid_list, HeapTupleGetOid(tuple));
+			oid_list = lappend_oid(oid_list, candidateOid);
 			MemoryContextSwitchTo(oldcontext);
 		}
 
@@ -2187,7 +2273,6 @@ vacuum_appendonly_indexes(Relation aoRelation,
 	Relation   *Irel;
 	int			nindexes;
 	AppendOnlyIndexVacuumState vacuumIndexState;
-	List *extra_oids;
 	FileSegInfo **segmentFileInfo = NULL; /* Might be a casted AOCSFileSegInfo */
 	int totalSegfiles;
 
@@ -2243,12 +2328,8 @@ vacuum_appendonly_indexes(Relation aoRelation,
 
 			for (i = 0; i < nindexes; i++)
 			{
-				extra_oids =
-					get_oids_for_bitmap(vacstmt->extra_oids, Irel[i], aoRelation, reindex_count);
-
-				vacuum_appendonly_index(Irel[i], &vacuumIndexState, extra_oids, updated_stats,
+				vacuum_appendonly_index(Irel[i], &vacuumIndexState, updated_stats,
 						rel_tuple_count, vacstmt->full);
-				list_free(extra_oids);
 			}
 			reindex_count++;
 		}
@@ -2362,14 +2443,9 @@ vacuum_heap_rel(Relation onerel, VacuumStmt *vacstmt,
 		{
 			for (i = 0; i < nindexes; i++)
 			{
-				List *extra_oids =
-					get_oids_for_bitmap(vacstmt->extra_oids, Irel[i],
-										onerel, reindex_count);
-
 				vacuum_index(&vacuum_pages, Irel[i],
 							 vacrelstats->rel_indexed_tuples, 0, updated_stats,
-							 extra_oids, check_stats);
-				list_free(extra_oids);
+							 check_stats);
 			}
 			reindex_count++;
 		}
@@ -2414,7 +2490,7 @@ vacuum_heap_rel(Relation onerel, VacuumStmt *vacstmt,
 		{
 			/* Try to shrink heap */
 			heldoff = repair_frag(vacrelstats, onerel, &vacuum_pages, &fraged_pages,
-								  nindexes, Irel, updated_stats, vacstmt->extra_oids, reindex_count);
+								  nindexes, Irel, updated_stats, reindex_count);
 			vac_close_indexes(nindexes, Irel, NoLock);
 		}
 		else
@@ -3303,7 +3379,7 @@ static bool
 repair_frag(VRelStats *vacrelstats, Relation onerel,
 			VacPageList vacuum_pages, VacPageList fraged_pages,
 			int nindexes, Relation *Irel, List *updated_stats,
-			List *all_extra_oids, int reindex_count)
+			int reindex_count)
 {
 	MIRROREDLOCK_BUFMGR_DECLARE;
 
@@ -4150,31 +4226,12 @@ repair_frag(VRelStats *vacrelstats, Relation onerel,
 		ReleaseBuffer(dst_buffer);
 	}
 
-	if (num_moved > 0)
-	{
-		/*
-		 * We have to commit our tuple movings before we truncate the
-		 * relation.  Ideally we should do Commit/StartTransactionCommand
-		 * here, relying on the session-level table lock to protect our
-		 * exclusive access to the relation.  However, that would require a
-		 * lot of extra code to close and re-open the relation, indexes, etc.
-		 * For now, a quick hack: record status of current transaction as
-		 * committed, and continue.  We force the commit to be synchronous so
-		 * that it's down to disk before we truncate.  (Note: tqual.c knows
-		 * that VACUUM FULL always uses sync commit, too.)	The transaction
-		 * continues to be shown as running in the ProcArray.
-		 *
-		 * XXX This desperately needs to be revisited.	Any failure after this
-		 * point will result in a PANIC "cannot abort transaction nnn, it was
-		 * already committed"!  As a precaution, we prevent cancel interrupts
-		 * after this point to mitigate this problem; caller is responsible for
-		 * re-enabling them after committing the transaction.
-		 */
-		HOLD_INTERRUPTS();
-		heldoff = true;
-		ForceSyncCommit();
-		(void) RecordTransactionCommit();
-	}
+	/*
+	 * In GPDB, the moving of relation tuples and truncating the relation is
+	 * performed in two separate transactions one after the other so we don't
+	 * need to commit the transaction here unlike the upstream code. The
+	 * transactions are started and ended in vacuumStatement_Relation().
+	 */
 
 	/*
 	 * We are not going to move any more tuples across pages, but we still
@@ -4614,7 +4671,6 @@ scan_index(Relation indrel, double num_tuples, List *updated_stats, bool isfull,
 	ivinfo.message_level = elevel;
 	ivinfo.num_heap_tuples = num_tuples;
 	ivinfo.strategy = vac_strategy;
-	ivinfo.extra_oids = NIL;
 
 	stats = index_vacuum_cleanup(&ivinfo, NULL);
 
@@ -4664,7 +4720,6 @@ scan_index(Relation indrel, double num_tuples, List *updated_stats, bool isfull,
 static void
 vacuum_appendonly_index(Relation indexRelation,
 		AppendOnlyIndexVacuumState* vacuumIndexState,
-		List *extra_oids,
 		List *updated_stats,
 		double rel_tuple_count,
 		bool isfull)
@@ -4681,7 +4736,6 @@ vacuum_appendonly_index(Relation indexRelation,
 	ivinfo.index = indexRelation;
 	ivinfo.vacuum_full = isfull;
 	ivinfo.message_level = elevel;
-	ivinfo.extra_oids = extra_oids;
 	ivinfo.num_heap_tuples = rel_tuple_count;
 	ivinfo.strategy = vac_strategy;
 
@@ -4730,7 +4784,7 @@ vacuum_appendonly_index(Relation indexRelation,
  */
 static void
 vacuum_index(VacPageList vacpagelist, Relation indrel,
-			 double num_tuples, int keep_tuples, List *updated_stats, List *extra_oids,
+			 double num_tuples, int keep_tuples, List *updated_stats,
 			 bool check_stats)
 {
 	IndexBulkDeleteResult *stats;
@@ -4744,7 +4798,6 @@ vacuum_index(VacPageList vacpagelist, Relation indrel,
 	ivinfo.message_level = elevel;
 	ivinfo.num_heap_tuples = num_tuples + keep_tuples;
 	ivinfo.strategy = vac_strategy;
-	ivinfo.extra_oids = extra_oids;
 
 	/* Do bulk deletion */
 	stats = index_bulk_delete(&ivinfo, NULL, tid_reaped, (void *) vacpagelist);
@@ -5284,11 +5337,13 @@ dispatchVacuum(VacuumStmt *vacstmt, VacuumStatsContext *ctx)
 	Assert(vacstmt->vacuum);
 	Assert(!vacstmt->analyze);
 
+	/* XXX: Some kinds of VACUUM assign a new relfilenode. bitmap indexes maybe? */
 	CdbDispatchUtilityStatement((Node *) vacstmt,
-											DF_CANCEL_ON_ERROR|
-											DF_WITH_SNAPSHOT|
-											DF_NEED_TWO_PHASE,
-											&cdb_pgresults);
+								DF_CANCEL_ON_ERROR|
+								DF_WITH_SNAPSHOT|
+								DF_NEED_TWO_PHASE,
+								GetAssignedOidsForDispatch(),
+								&cdb_pgresults);
 
 	vacuum_combine_stats(ctx, &cdb_pgresults);
 
@@ -5321,9 +5376,13 @@ open_relation_and_check_permission(VacuumStmt *vacstmt,
 	 * My marking the drop transaction as busy before checking, the worst
 	 * thing that can happen is that both transaction see each other and
 	 * both cancel the drop.
+	 *
+	 * The upgrade deadlock is not applicable to vacuum full because
+	 * it begins with an AccessExclusive lock and doesn't need to
+	 * upgrade it.
 	 */
 
-	if (isDropTransaction)
+	if (isDropTransaction && !vacstmt->full)
 	{
 		MyProc->inDropTransaction = true;
 		if (HasDropTransaction(false))
@@ -5386,7 +5445,7 @@ open_relation_and_check_permission(VacuumStmt *vacstmt,
 	 */
 	if (onerel->rd_rel->relkind != expected_relkind ||
 		RelationIsExternal(onerel) ||
-		GpPersistent_IsPersistentRelation(RelationGetRelid(onerel)))
+		(vacstmt->full && GpPersistent_IsPersistentRelation(RelationGetRelid(onerel))))
 	{
 		ereport(WARNING,
 				(errmsg("skipping \"%s\" --- cannot vacuum indexes, views, external tables, or special system tables",
@@ -5418,131 +5477,6 @@ open_relation_and_check_permission(VacuumStmt *vacstmt,
 	}
 
 	return onerel;
-}
-
-/*
- * Generate three oids for each bitmap index in a given relation.
- *
- * These oids will be used in QD and QEs for new relfilenodes during
- * reindexing a bitmap index.
- *
- * The index oid along with these three oids will be stored consecutively
- * in vacstmt->extra_oids.
- */
-void
-gen_oids_for_bitmaps(VacuumStmt *vacstmt, Relation onerel)
-{
-	Relation *Irel = NULL;
-	int nindexes;
-	int index_no;
-
-	vac_open_indexes(onerel, AccessShareLock, &nindexes, &Irel);
-	if (Irel == NULL)
-		return;
-
-	Assert(nindexes > 0);
-	for (index_no = 0; index_no < nindexes; index_no++)
-	{
-		/*
-		 * If this relation is a bitmap index, we generate three OIDs
-		 * for relfilenodes needed for vacuuming a bitmap index. We do this
-		 * NUM_EXTRA_OIDS_FOR_BITMAP to handle the case when reindex is called
-		 * multiple times, such as "vacuum full" and etc.
-		 */
-		Oid indoid = RelationGetRelid(Irel[index_no]);
-		Oid tblspc = Irel[index_no]->rd_rel->reltablespace;
-		bool shared = Irel[index_no]->rd_rel->relisshared;
-		int i;
-
-		if (RelationIsBitmapIndex(Irel[index_no]))
-		{
-			vacstmt->extra_oids = lappend_oid(vacstmt->extra_oids,
-											  indoid);
-			Assert(NUM_EXTRA_OIDS_FOR_BITMAP % 3 == 0);
-
-			for (i = 0; i < NUM_EXTRA_OIDS_FOR_BITMAP / 3; i++)
-			{
-				vacstmt->extra_oids = lappend_oid(vacstmt->extra_oids,
-											  GetNewRelFileNode(tblspc,
-																shared,
-																NULL));
-				vacstmt->extra_oids = lappend_oid(vacstmt->extra_oids,
-												  GetNewRelFileNode(tblspc,
-																	shared,
-																	NULL));
-				vacstmt->extra_oids = lappend_oid(vacstmt->extra_oids,
-												  GetNewRelFileNode(tblspc,
-																	shared,
-																	NULL));
-			}
-		}
-	}
-
-	vac_close_indexes(nindexes, Irel, AccessShareLock);
-}
-
-/*
- * Obtain extra oids for a given index.
- *
- * If the given index is a bitmap index, extra oids are returned. Otherwise,
- * NIL is returned.
- *
- * occurrence determines the offset of the OIDs in the list.
- *
- * If there are no extra oids available for the bitmap index, ereport
- * is called.
- *
- * The caller is responsible to free the space.
- */
-List *
-get_oids_for_bitmap(List *all_extra_oids, Relation Irel,
-					Relation onerel, int occurrence)
-{
-	List *extra_oids = NIL;
-	int count = 0;
-	bool found = false;
-	ListCell *lc;
-	int oid_index = 0;
-
-	if (!RelationIsBitmapIndex(Irel))
-		return extra_oids;
-
-	foreach(lc, all_extra_oids)
-	{
-		if (found)
-		{
-			if (oid_index / 3 == occurrence - 1)
-			{
-				extra_oids = lappend_oid(extra_oids, lfirst_oid(lc));
-				if (list_length(extra_oids) == 3)
-					break;
-			}
-
-			oid_index ++;
-
-			if (oid_index % NUM_EXTRA_OIDS_FOR_BITMAP == 0)
-				break;
-		}
-
-		if (count % (NUM_EXTRA_OIDS_FOR_BITMAP + 1) == 0 &&
-			lfirst_oid(lc) == RelationGetRelid(Irel))
-		{
-			found = true;
-			oid_index = 0;
-		}
-
-		count++;
-	}
-
-	if (extra_oids == NULL)
-		ereport(ERROR,
-				(errmsg("can not vacuum the relation '%s' with bitmap indexes. "
-						"Please either increase your maintenance_work_mem or "
-						"drop the bitmap index and try again.",
-						RelationGetRelationName(onerel))));
-
-	Assert(extra_oids != NULL && list_length(extra_oids) == 3);
-	return extra_oids;
 }
 
 /*

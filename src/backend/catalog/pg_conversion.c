@@ -37,7 +37,7 @@ Oid
 ConversionCreate(const char *conname, Oid connamespace,
 				 Oid conowner,
 				 int32 conforencoding, int32 contoencoding,
-				 Oid conproc, bool def, Oid newOid)
+				 Oid conproc, bool def)
 {
 	int			i;
 	Relation	rel;
@@ -102,9 +102,6 @@ ConversionCreate(const char *conname, Oid connamespace,
 
 	tup = heap_form_tuple(tupDesc, values, nulls);
 
-	if (newOid != 0)
-		HeapTupleSetOid(tup, newOid);
-
 	/* insert a new tuple */
 	oid = simple_heap_insert(rel, tup);
 	Assert(OidIsValid(oid));
@@ -131,6 +128,8 @@ ConversionCreate(const char *conname, Oid connamespace,
 	/* create dependency on owner */
 	recordDependencyOnOwner(ConversionRelationId, HeapTupleGetOid(tup),
 							conowner);
+	/* dependency on extension */
+	recordDependencyOnCurrentExtension(&myself, false);
 
 	heap_freetuple(tup);
 	heap_close(rel, RowExclusiveLock);

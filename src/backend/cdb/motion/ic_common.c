@@ -880,14 +880,15 @@ SendDummyPacket(void)
 	struct addrinfo* addrs = NULL;
 	struct addrinfo* rp = NULL;
 	struct addrinfo hint;
-	uint16 udp_listenner;
+	uint16 udp_listener;
 	char	port_str[32] = {0};
 	char* dummy_pkt = "stop it";
+
 	/*
-	* Get address info from interconnect udp listenner port
-	*/
-	udp_listenner = Gp_listener_port;
-	snprintf(port_str, sizeof(port_str), "%d", udp_listenner);
+	 * Get address info from interconnect udp listener port
+	 */
+	udp_listener = Gp_listener_port;
+	snprintf(port_str, sizeof(port_str), "%d", udp_listener);
 
 	MemSet(&hint, 0, sizeof(hint));
 	hint.ai_socktype = SOCK_DGRAM;
@@ -918,7 +919,10 @@ SendDummyPacket(void)
 		if (!pg_set_noblock(sockfd))
 		{
 			if (sockfd >= 0)
+			{
 				closesocket(sockfd);
+				sockfd = -1;
+			}
 			continue;
 		}
 		break;
@@ -931,14 +935,14 @@ SendDummyPacket(void)
 	}
 
 	/*
-	* Send a dummy package to the interconnect listener, try 10 times
-	*/
+	 * Send a dummy package to the interconnect listener, try 10 times
+	 */
 	int counter = 0;
 	while (counter < 10)
 	{
 		counter++;
 		ret = sendto(sockfd, dummy_pkt, strlen(dummy_pkt), 0, rp->ai_addr, rp->ai_addrlen);
-		if(ret < 0)
+		if (ret < 0)
 		{
 			if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
 			{
@@ -960,7 +964,7 @@ SendDummyPacket(void)
 	}
 
 	pg_freeaddrinfo_all(hint.ai_family, addrs);
-	close(sockfd);
+	closesocket(sockfd);
 	return;
 
 send_error:
@@ -971,7 +975,7 @@ send_error:
 	}
 	if (sockfd != -1)
 	{
-		close(sockfd);
+		closesocket(sockfd);
 	}
 	return;
 }

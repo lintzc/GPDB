@@ -3197,7 +3197,7 @@ RemoveOldXlogFiles(uint32 log, uint32 seg, XLogRecPtr endptr)
 				else
 				{
 					/* No need for any more future segments... */
-					//int rc;
+					int rc = 0;
 
 					ereport(DEBUG2,
 							(errmsg("removing transaction log file \"%s\"",
@@ -3227,22 +3227,19 @@ RemoveOldXlogFiles(uint32 log, uint32 seg, XLogRecPtr endptr)
 						continue;
 					}
 					snprintf(newfilename, MAXPGPATH, "%s.deleted", xlde->d_name);
-					MirroredFlatFile_Drop(
+					rc = MirroredFlatFile_Drop(
 										  XLOGDIR,
 										  newfilename,
 										  /* suppressError */ true,
 										  /*isMirrorRecovery */ false);
 #else
-					MirroredFlatFile_Drop(
+					rc = MirroredFlatFile_Drop(
 										  XLOGDIR,
 										  xlde->d_name,
 										  /* suppressError */ true,
 										  /*isMirrorRecovery */ false);
 #endif
 
-					/* GPDB_83_MERGE_FIXME: MirroredFlatFile_Drop doesn't return a return
-					 * code */
-#if 0
 					if (rc != 0)
 					{
 						ereport(LOG,
@@ -3251,7 +3248,7 @@ RemoveOldXlogFiles(uint32 log, uint32 seg, XLogRecPtr endptr)
 										path)));
 						continue;
 					}
-#endif
+
 					CheckpointStats.ckpt_segs_removed++;
 				}
 
@@ -7288,7 +7285,7 @@ StartupXLOG(void)
 		 *   performed by this backend.
 		 *
 		 *   3. At the beginning of pass 2, we are initializing
-		 *   catlaog cache, see StartupProcessMain()
+		 *   catalog cache, see StartupProcessMain()
 		 */
 		if (IsUnderPostmaster)
 			InitCatalogCache();
@@ -8757,6 +8754,7 @@ void
 CreateCheckPoint(int flags)
 {
 	MIRRORED_LOCK_DECLARE;
+	READ_PERSISTENT_STATE_ORDERED_LOCK_DECLARE;
 
 	bool		shutdown = (flags & CHECKPOINT_IS_SHUTDOWN) != 0;
 	CheckPoint	checkPoint;
@@ -8770,13 +8768,8 @@ CreateCheckPoint(int flags)
 	uint32		_logSeg;
 	TransactionId *inCommitXids;
 	int			nInCommit;
+	bool resync_to_sync_transition = (flags & CHECKPOINT_RESYNC_TO_INSYNC_TRANSITION) != 0;
 
-	if (Debug_persistent_recovery_print)
-	  {
-	    elog(PersistentRecovery_DebugPrintLevel(),
-                         "CreateCheckPoint: entering..."
-		 );
-	  }
 	if (shutdown && ControlFile->state == DB_STARTUP)
 	{
 		return;
@@ -8784,7 +8777,7 @@ CreateCheckPoint(int flags)
 
 #ifdef FAULT_INJECTOR
 	/* During resync checkpoint has to complete otherwise segment cannot transition into Sync state */
-	if (! FileRepResync_IsTransitionFromResyncToInSync())
+	if (! resync_to_sync_transition)
 	{
 		if (FaultInjector_InjectFaultIfSet(
 										   Checkpoint,
@@ -8813,7 +8806,7 @@ CreateCheckPoint(int flags)
 	MemSet(&CheckpointStats, 0, sizeof(CheckpointStats));
 	CheckpointStats.ckpt_start_t = GetCurrentTimestamp();
 
-	if (FileRepResync_IsTransitionFromResyncToInSync())
+	if (resync_to_sync_transition)
 	{
 		LWLockAcquire(MirroredLock, LW_EXCLUSIVE);
 
@@ -8867,8 +8860,8 @@ CreateCheckPoint(int flags)
 	/*
 	 * The WRITE_PERSISTENT_STATE_ORDERED_LOCK gets these locks:
 	 *    MirroredLock SHARED, and
-	 *    CheckpointStartLock SHARED,
 	 *    PersistentObjLock EXCLUSIVE.
+	 * as well as set MyProc->inCommit = true.
 	 *
 	 * The READ_PERSISTENT_STATE_ORDERED_LOCK gets this lock:
 	 *    PersistentObjLock SHARED.
@@ -8876,19 +8869,6 @@ CreateCheckPoint(int flags)
 	 * They do this to prevent Persistent object changes during checkpoint and
 	 * prevent persistent object reads while writing.  And acquire the MirroredLock
 	 * at a level that blocks DDL during FileRep statechanges...
-	 *
-	 * GPDB_83_MERGE_FIXME: CheckpointStartLock is no more. Do we need to hold something
-	 * else instead?
-	 * 
-	 * We get the CheckpointStartLock to prevent Persistent object writers as
-	 * we collect the Master Mirroring information from mmxlog_append_checkpoint_data
-	 * until finally after the checkpoint record is inserted into the XLOG to prevent the
-	 * persistent information from changing, and all buffers have been flushed to disk..
-	 *
-	 * We must hold CheckpointStartLock while determining the checkpoint REDO
-	 * pointer.  This ensures that any concurrent transaction commits will be
-	 * either not yet logged, or logged and recorded in pg_clog. See notes in
-	 * RecordTransactionCommit().
 	 */
 
 	/*
@@ -8938,7 +8918,7 @@ CreateCheckPoint(int flags)
 #endif
 		{
 			LWLockRelease(WALInsertLock);
-			if (FileRepResync_IsTransitionFromResyncToInSync())
+			if (resync_to_sync_transition)
 			{
 				LWLockRelease(MirroredLock);
 			}
@@ -9078,6 +9058,32 @@ CreateCheckPoint(int flags)
 
 	/*
 	 * Now insert the checkpoint record into XLOG.
+	 *
+	 * Here is the locking order and scope:
+	 *
+	 * getDtxCheckPointInfoAndLock (i.e. shmControlLock)
+	 * 	READ_PERSISTENT_STATE_ORDERED_LOCK (i.e. PersistentObjLock)
+	 * 		mmxlog_append_checkpoint_data
+	 * 		XLogInsert
+	 * 	READ_PERSISTENT_STATE_ORDERED_UNLOCK
+	 * freeDtxCheckPointInfoAndUnlock
+	 * XLogFlush
+	 *
+	 * We get the PersistentObjLock to prevent Persistent Object writers as
+	 * we collect the Master Mirroring information from mmxlog_append_checkpoint_data()
+	 * until finally after the checkpoint record is inserted into the XLOG to prevent the
+	 * persistent information from changing.
+	 *
+	 * For example, if we don't hold the PersistentObjLock across mmxlog_append_checkpoint_data()
+	 * and XLogInsert(), another xlog activity like drop tablespace could happen in between, which
+	 * might caused wrong behavior when master standby replay checkpoint record.
+	 *
+	 * Master standby replay (mmxlog_read_checkpoint_data) the mmxlog information stored in the checkpoint
+	 * record to recreate those persistent objects like filespace, tablespace, database dir, etc. If those
+	 * objects dropped after checkpoint collected persistent objects information, but before checkpoint
+	 * record write to XLOG, then the standby replay would first drop the object based on mmxlog record,
+	 * then recreated based on the checkpoint record. That will ends-up left behind the directories already
+	 * dropped on the master, break the consistency between the master and the standby.
 	 */
 
 	getDtxCheckPointInfoAndLock(&dtxCheckPointInfo, &dtxCheckPointInfoSize);
@@ -9097,6 +9103,7 @@ CreateCheckPoint(int flags)
 	 * meta data to keep the standby consistent. Safe to call on segments
 	 * as this is a NOOP if we're not the master.
 	 */
+	READ_PERSISTENT_STATE_ORDERED_LOCK;
 	mmxlog_append_checkpoint_data(rdata);
 
 	prepared_transaction_agg_state *p = NULL;
@@ -9112,20 +9119,21 @@ CreateCheckPoint(int flags)
 	if (Debug_persistent_recovery_print)
 	{
 		elog(PersistentRecovery_DebugPrintLevel(),
-	        "CreateCheckPoint: Regular checkpoint length = %u"
-	        ", DTX checkpoint length %u (rdata[1].next is NULL %s)"
-	        ", Master mirroring filespace length = %u (rdata[2].next is NULL %s)"
-	        ", Master mirroring tablespace length = %u (rdata[3].next is NULL %s)"
-	       ", Master mirroring database directory length = %u",
-	       rdata[0].len,
-	       rdata[1].len,
-	       (rdata[1].next == NULL ? "true" : "false"),
-	       rdata[2].len,
-	       (rdata[2].next == NULL ? "true" : "false"),
-	       rdata[3].len,
-	       (rdata[3].next == NULL ? "true" : "false"),
-	       rdata[4].len);
-		elog(PersistentRecovery_DebugPrintLevel(), "CreateCheckPoint; Prepared Transaction length = %u", rdata[5].len);
+			"CreateCheckPoint: Regular checkpoint length = %u"
+			", DTX checkpoint length %u (rdata[1].next is NULL %s)"
+			", Master mirroring filespace length = %u (rdata[2].next is NULL %s)"
+			", Master mirroring tablespace length = %u (rdata[3].next is NULL %s)"
+			", Master mirroring database directory length = %u"
+			", Prepared Transaction length = %u",
+			rdata[0].len,
+			rdata[1].len,
+			(rdata[1].next == NULL ? "true" : "false"),
+			rdata[2].len,
+			(rdata[2].next == NULL ? "true" : "false"),
+			rdata[3].len,
+			(rdata[3].next == NULL ? "true" : "false"),
+			rdata[4].len,
+			rdata[5].len);
 	}
 
 
@@ -9143,11 +9151,8 @@ CreateCheckPoint(int flags)
 
 	if (Debug_persistent_recovery_print)
 	{
-		if (ptrd_oldest_ptr == NULL)
-			elog(PersistentRecovery_DebugPrintLevel(), "Oldest Prepared Record = NULL");
-		else
-			elog(PersistentRecovery_DebugPrintLevel(), "CreateCheckPoint: Oldest Prepared Record = %s",
-					XLogLocationToString(ptrd_oldest_ptr));
+		elog(PersistentRecovery_DebugPrintLevel(), "CreateCheckPoint: Oldest Prepared Record = %s",
+				ptrd_oldest_ptr ? XLogLocationToString(ptrd_oldest_ptr) : "NULL");
 	}
 
 
@@ -9157,6 +9162,8 @@ CreateCheckPoint(int flags)
 	recptr = XLogInsert(RM_XLOG_ID,
 			            shutdown ? XLOG_CHECKPOINT_SHUTDOWN : XLOG_CHECKPOINT_ONLINE,
 			            rdata);
+
+	READ_PERSISTENT_STATE_ORDERED_UNLOCK;
 
 	if (Debug_persistent_recovery_print)
 	{
@@ -9188,10 +9195,13 @@ CreateCheckPoint(int flags)
 	else
 		XLByteToSeg(ControlFile->checkPointCopy.redo, _logId, _logSeg);
 
-	elog((Debug_print_qd_mirroring ? LOG : DEBUG1),
-		 "CreateCheckPoint: previous checkpoint's earliest info (copy redo location %s, previous checkpoint location %s)",
-		 XLogLocationToString(&ControlFile->checkPointCopy.redo),
-		 XLogLocationToString2(&ControlFile->prevCheckPoint));
+	if (Debug_persistent_recovery_print)
+	{
+		elog(PersistentRecovery_DebugPrintLevel(),
+			 "CreateCheckPoint: previous checkpoint's earliest info (copy redo location %s, previous checkpoint location %s)",
+			 XLogLocationToString(&ControlFile->checkPointCopy.redo),
+			 XLogLocationToString2(&ControlFile->prevCheckPoint));
+	}
 
 	/*
 	 * Update the control file.
@@ -9297,20 +9307,19 @@ CreateCheckPoint(int flags)
 	if (!InRecovery)
 		TruncateSUBTRANS(GetOldestXmin(true, false));
 
+	if (Debug_persistent_recovery_print)
+	{
+		elog(PersistentRecovery_DebugPrintLevel(),
+			 "CreateCheckPoint: checkpoint location %s, redo location %s",
+			 XLogLocationToString(&ControlFile->checkPoint),
+			 XLogLocationToString2(&checkPoint.redo));
+	}
+
 	/* All real work is done, but log before releasing lock. */
 	if (log_checkpoints)
 		LogCheckpointEnd();
 
-	/* GPDB_83_MERGE_FIXME: Isn't this redundant with log_checkpoints? */
-	if (Debug_persistent_recovery_print)
-		elog(PersistentRecovery_DebugPrintLevel(),
-			 "CreateCheckPoint: shutdown %s, force %s, checkpoint location %s, redo location %s",
-			 (shutdown ? "true" : "false"),
-			 ((flags & CHECKPOINT_FORCE) ? "true" : "false"),
-			 XLogLocationToString(&ControlFile->checkPoint),
-			 XLogLocationToString2(&checkPoint.redo));
-
-	if (FileRepResync_IsTransitionFromResyncToInSync())
+	if (resync_to_sync_transition)
 	{
 		RequestXLogSwitch();
 
@@ -9838,8 +9847,8 @@ xlog_desc(StringInfo buf, XLogRecPtr beginLoc, XLogRecord *record)
 										record->xl_len,
 										&beginLoc,
 										/* errlevel */ -1,	// Suppress elog altogether on master mirroring checkpoint length checking.
-										&tablespaceCount,
 										&filespaceCount,
+										&tablespaceCount,
 										&databaseCount))
 
 				{
@@ -10149,7 +10158,8 @@ do_pg_start_backup(const char *backupidstr, bool fast, char **labelfile)
 			 * We use CHECKPOINT_IMMEDIATE only if requested by user (via
 			 * passing fast = true).  Otherwise this can take awhile.
 			 */
-			RequestCheckpoint(CHECKPOINT_FORCE | CHECKPOINT_WAIT);
+			RequestCheckpoint(CHECKPOINT_FORCE | CHECKPOINT_WAIT |
+							  (fast ? CHECKPOINT_IMMEDIATE : 0));
 
 			/*
 			 * Now we need to fetch the checkpoint record location, and also
@@ -11226,7 +11236,7 @@ StartupProcessMain(int passNum)
 	case 2:
 	case 4:
 		/*
-		 * NOTE: The following initialization logic was borrrowed from ftsprobe.
+		 * NOTE: The following initialization logic was borrowed from ftsprobe.
 		 */
 		SetProcessingMode(InitProcessing);
 
@@ -11327,6 +11337,19 @@ StartupProcessMain(int passNum)
 		if (passNum == 2)
 		{
 			StartupXLOG_Pass2();
+			/*
+			 * The cache init file created by
+			 * RelationCacheInitializePhase3() contains critical
+			 * relations and index entries from template1 database.
+			 * XLOG replay in pass 3 may invalidate these entries,
+			 * e.g. redo records for reindex operation on a system
+			 * table in template1.  Therefore, delete the file now
+			 * and let pass 4 rebuild it.  Note that pass 3 does not
+			 * need relcache to operate as it uses resource manager
+			 * redo (rm_redo()) methods to replay xlog rather than
+			 * regular access methods.
+			 */
+			RelationCacheInitFileRemove();
 		}
 		else
 		{
@@ -11866,20 +11889,6 @@ int XLogAddRecordsToChangeTracking(
 		lastEndLoc = EndRecPtr;
 
 		SIMPLE_FAULT_INJECTOR(FileRepTransitionToChangeTracking);
-
-		if (filerep_inject_change_tracking_recovery_fault)
-		{
-			if (isDatabaseRunning() == FALSE)
-			{
-				filerep_inject_change_tracking_recovery_fault = FALSE;
-
-				ereport(PANIC,
-					(errmsg("change tracking failure, "
-					"injected fault by guc filerep_inject_change_tracking_recovery_fault, "
-					"postmaster reset requested"),
-					FileRep_errcontext()));
-			}
-		}
 
 		if (lastChangeTrackingEndLoc != NULL)
 		{

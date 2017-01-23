@@ -19,6 +19,7 @@
 #include "access/xact.h"
 #include "catalog/dependency.h"
 #include "catalog/indexing.h"
+#include "catalog/oid_dispatch.h"
 #include "catalog/pg_depend.h"
 #include "catalog/pg_language.h"
 #include "catalog/pg_namespace.h"
@@ -86,8 +87,7 @@ ProcedureCreate(const char *procedureName,
 				Datum proconfig,
 				float4 procost,
 				float4 prorows,
-				char prodataaccess,
-				Oid funcOid)
+				char prodataaccess)
 {
 	Oid			retval;
 	int			parameterCount;
@@ -549,13 +549,12 @@ ProcedureCreate(const char *procedureName,
 	else
 	{
 		/* Creating a new procedure */
+		Oid			funcOid;
+
 		tup = heap_form_tuple(tupDesc, values, nulls);
-				
-		if (OidIsValid(funcOid))
-			HeapTupleSetOid(tup, funcOid);
-		
+
 		/* Insert tuple into the relation */
-		simple_heap_insert(rel, tup);
+		funcOid = simple_heap_insert(rel, tup);
 		is_update = false;
 	}
 
@@ -572,7 +571,7 @@ ProcedureCreate(const char *procedureName,
 	 */
 	if (is_update)
 	{
-		deleteDependencyRecordsFor(ProcedureRelationId, retval);
+		deleteDependencyRecordsFor(ProcedureRelationId, retval, true);
 		deleteProcCallbacks(retval);
 	}
 
@@ -625,6 +624,9 @@ ProcedureCreate(const char *procedureName,
 	/* dependency on owner */
 	if (!is_update)
 		recordDependencyOnOwner(ProcedureRelationId, retval, proowner);
+
+	/* dependency on extension */
+	recordDependencyOnCurrentExtension(&myself, is_update);
 
 	heap_freetuple(tup);
 

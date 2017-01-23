@@ -85,8 +85,17 @@
 
 /* GUC variables */
 char	   *default_tablespace = NULL;
-/* GPDB_83_MERGE_FIXME: this is NULL in upstream, but because I removed this from guc.c,
- * the guc machinery isn't initializing it to "".
+/* In Postgres, this GUC was originally introduced by commit acfce502.
+ * This GUC applied on both locations of temp files as well as temp tables.
+ *
+ * In GPDB, we already provide `filespace` to specify a different location
+ * for temp files, e.g. `gpfilespace --movetempfilespace`. As well as the
+ * temp tables can be created on tablespaces with different filespaces.
+ * Hence we don't have this GUC and it is initialized to "".
+ *
+ * In future, it's valuable to add this GUC back to let GPDB provide
+ * easy way for users to randomly put the temp table on the `temp_tablespaces`
+ * through GUC instead of specifying for each temp table.
  */
 char	   *temp_tablespaces = "";
 
@@ -182,7 +191,7 @@ CreateTableSpace(CreateTableSpaceStmt *stmt)
 	 * index would catch this anyway, but might as well give a friendlier
 	 * message.)
 	 */
-	if (OidIsValid(get_tablespace_oid(stmt->tablespacename)))
+	if (OidIsValid(get_tablespace_oid(stmt->tablespacename, true)))
 		ereport(ERROR,
 				(errcode(ERRCODE_DUPLICATE_OBJECT),
 				 errmsg("tablespace \"%s\" already exists",
@@ -208,10 +217,6 @@ CreateTableSpace(CreateTableSpaceStmt *stmt)
 	nulls[Anum_pg_tablespace_spcfsoid - 1] = false;
 
 	tuple = heap_form_tuple(rel->rd_att, values, nulls);
-
-	/* Keep oids synchonized between master and segments */
-	if (OidIsValid(stmt->tsoid))
-		HeapTupleSetOid(tuple, stmt->tsoid);
 
 	tablespaceoid = simple_heap_insert(rel, tuple);
 
@@ -251,11 +256,11 @@ CreateTableSpace(CreateTableSpaceStmt *stmt)
 
 	if (Gp_role == GP_ROLE_DISPATCH)
 	{
-		stmt->tsoid = tablespaceoid;
 		CdbDispatchUtilityStatement((Node *) stmt,
 									DF_CANCEL_ON_ERROR|
 									DF_WITH_SNAPSHOT|
 									DF_NEED_TWO_PHASE,
+									GetAssignedOidsForDispatch(),
 									NULL);
 
 		/* MPP-6929: metadata tracking */
@@ -958,7 +963,7 @@ assign_default_tablespace(const char *newval, bool doit, GucSource source)
 	if (IsTransactionState())
 	{
 		if (newval[0] != '\0' &&
-			!OidIsValid(get_tablespace_oid(newval)))
+			!OidIsValid(get_tablespace_oid(newval, true)))
 		{
 			/*
 			 * When source == PGC_S_TEST, we are checking the argument of an
@@ -1019,7 +1024,7 @@ GetDefaultTablespace(bool forTemp)
 	 * to refer to an existing tablespace; we just silently return InvalidOid,
 	 * causing the new object to be created in the database's tablespace.
 	 */
-	result = get_tablespace_oid(default_tablespace);
+	result = get_tablespace_oid(default_tablespace, true);
 
 	/*
 	 * Allow explicit specification of database's default tablespace in
@@ -1091,7 +1096,7 @@ PrepareTempTablespaces(void)
 		}
 
 		/* Else verify that name is a valid tablespace name */
-		curoid = get_tablespace_oid(curname);
+		curoid = get_tablespace_oid(curname, true);
 		if (curoid == InvalidOid)
 		{
 			/* Silently ignore any bad list elements */
@@ -1130,7 +1135,7 @@ PrepareTempTablespaces(void)
  * Returns InvalidOid if tablespace name not found.
  */
 Oid
-get_tablespace_oid(const char *tablespacename)
+get_tablespace_oid(const char *tablespacename, bool missing_ok)
 {
 	Oid			result;
 	Relation	rel;
@@ -1206,6 +1211,12 @@ get_tablespace_oid(const char *tablespacename)
 
 	heap_endscan(scandesc);
 	heap_close(rel, AccessShareLock);
+
+	if (!OidIsValid(result) && !missing_ok)
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("tablespace \"%s\" does not exist",
+						tablespacename)));
 
 	return result;
 }

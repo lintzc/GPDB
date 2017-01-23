@@ -51,7 +51,7 @@ struct CdbPgResults;
  * suggested that the caller use cdbdisp_finishCommand().
  */
 void
-cdbdisp_dispatchPlan(struct QueryDesc *queryDesc,
+CdbDispatchPlan(struct QueryDesc *queryDesc,
 					 bool planRequiresTxn,
 					 bool cancelOnError,
 					 struct CdbDispatcherState *ds);
@@ -61,7 +61,7 @@ cdbdisp_dispatchPlan(struct QueryDesc *queryDesc,
  * gangs, both reader and writer
  */
 void
-CdbSetGucOnAllGangs(const char *strCommand, bool cancelOnError, bool needTwoPhase);
+CdbDispatchSetCommand(const char *strCommand, bool cancelOnError, bool needTwoPhase);
 
 /*
  * CdbDispatchCommand
@@ -98,6 +98,7 @@ CdbDispatchCommand(const char* strCommand,
 void
 CdbDispatchUtilityStatement(struct Node *stmt,
 							int flags,
+							List *oid_assignments,
 							struct CdbPgResults* cdb_pgresults);
 
 #endif   /* CDBDISP_QUERY_H */

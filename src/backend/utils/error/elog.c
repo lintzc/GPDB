@@ -1351,23 +1351,6 @@ getinternalerrposition(void)
 	return edata->internalpos;
 }
 
-
-/*
- * GPDB: errOmitLocation -- set flag indicating the error was reported by a qExec
- */
-int
-errOmitLocation(bool omitLocation)
-{
-	ErrorData  *edata = &errordata[errordata_stack_depth];
-
-	/* we don't bother incrementing recursion_depth */
-	CHECK_STACK_DEPTH();
-
-	edata->omit_location = omitLocation;
-
-	return 0;					/* return value does not matter */
-}
-
 /*
  * GPDB: errSendAlert -- set flag indicating the error should trigger an alert via e-mail or SNMP
  */
@@ -2898,7 +2881,7 @@ gp_write_pipe_chunk(const char *buffer, int len)
 }
 
 /*
- * Append a string (termniated by '\0') to the GpPipeProtoChunk.
+ * Append a string (terminated by '\0') to the GpPipeProtoChunk.
  *
  * If GpPipeProtoChunk does not have space for the given string,
  * this function appends enough data to fill the buffer, and
@@ -3021,12 +3004,12 @@ append_stacktrace(PipeProtoChunk *buffer, StringInfo append, void *const *stacka
 
 		cmdresult[0][0] = '\0';
 		fd = popen(cmd,"r");
-		if (fd != NULL && errno == 0)
+		if (fd != NULL)
 			fd_ok = true;
 
 		if (fd_ok)
 		{
-			for (stack_no = 0; stack_no < stacksize && stack_no < STACK_DEPTH_MAX && errno == 0; stack_no++)
+			for (stack_no = 0; stack_no < stacksize && stack_no < STACK_DEPTH_MAX; stack_no++)
 			{
 				/* initialize the string */
 				cmdresult[stack_no][0] = '\0';
@@ -3089,8 +3072,11 @@ append_stacktrace(PipeProtoChunk *buffer, StringInfo append, void *const *stacka
 				function = "<symbol not found>";
 			}
 
-			/* check if lineInfo was retrieved */
-			if (strchr(lineInfo, ':') == NULL)
+			// check if lineInfo was retrieved
+			// if lineinfo does not contain symbol ':' then the output of cmd contains the input address
+			// if lineinfo contains symbol '?' then the filename and line number cannot be determined (the output is ??:0)
+			if (strchr(lineInfo, ':') == NULL ||
+			    strchr(lineInfo, '?') != NULL)
 			{
 				/* no line info, print offset in function */
 				symbol_len = snprintf(symbol,
@@ -3311,8 +3297,7 @@ write_syslogger_in_csv(ErrorData *edata, bool amsyslogger)
 	if ((edata->printstack ||
 			(edata->elevel >= ERROR &&
 			(edata->elevel == PANIC || !edata->omit_location))) &&
-		edata->stacktracesize > 0 &&
-		edata->stacktracearray != NULL)
+		edata->stacktracesize > 0)
 	{
 		append_stacktrace(NULL /*PipeProtoChunk*/, NULL /*StringInfo*/, edata->stacktracearray,
 						  edata->stacktracesize, amsyslogger);
@@ -3654,8 +3639,7 @@ send_message_to_server_log(ErrorData *edata)
 
 	if (edata->elevel >= ERROR &&
 		(edata->elevel == PANIC || !edata->omit_location) &&
-		edata->stacktracesize > 0 &&
-		edata->stacktracearray != NULL)
+		edata->stacktracesize > 0)
 	{
 #ifndef WIN32
 		char	  **strings;

@@ -5,10 +5,6 @@
  *
  * Copyright (c) 2011, Greenplum Inc.
  *
- * $Id: $
- * $Change: $
- * $DateTime: $
- * $Author: $
  *-------------------------------------------------------------------------
  */
 #ifndef PG_EXTPROTOCOL_H
@@ -75,12 +71,11 @@ typedef enum ExtPtcFuncType
 } ExtPtcFuncType;
 
 extern Oid
-ExtProtocolCreateWithOid(const char			*protocolName,
-						 List				*readfuncName,
-						 List				*writefuncName,
-						 List				*validatorfuncName,						 
-						 Oid				 protOid,
-						 bool				 trusted);
+ExtProtocolCreate(const char *protocolName,
+				  List *readfuncName,
+				  List *writefuncName,
+				  List *validatorfuncName,
+				  bool trusted);
 
 extern void
 ExtProtocolDeleteByOid(Oid	protOid);

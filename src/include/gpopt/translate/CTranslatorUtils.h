@@ -18,7 +18,6 @@
 #define GPDXL_SYSTEM_COLUMNS 8
 
 #include "gpopt/translate/CTranslatorScalarToDXL.h"
-#include "gpopt/translate/CMappingColIdVarQuery.h"
 
 #include "gpos/base.h"
 #include "gpos/common/CBitSet.h"
@@ -104,28 +103,6 @@ namespace gpdxl
 
 		public:
 
-			typedef struct CContextPreloadMD
-			{
-				public:
-					// memory pool
-					IMemoryPool *m_pmp;
-
-					// MD accessor for function names
-					CMDAccessor *m_pmda;
-
-					CContextPreloadMD
-						(
-						IMemoryPool *pmp,
-						CMDAccessor *pmda
-						)
-						: m_pmp(pmp), m_pmda(pmda)
-					{}
-
-					~CContextPreloadMD()
-					{}
-
-			} CContextPreloadMD;
-
 			struct SCmptypeStrategy
 			{
 				IMDType::ECmpType ecomptype;
@@ -141,9 +118,9 @@ namespace gpdxl
 			static
 			OID OidCmpOperator(Expr* pexpr);
 
-			// get the opclass for index key
+			// get the opfamily for index key
 			static
-			OID OidIndexQualOpclass(INT iAttno, OID oidIndex);
+			OID OidIndexQualOpFamily(INT iAttno, OID oidIndex);
 			
 			// return the type for the system column with the given number
 			static
@@ -239,33 +216,9 @@ namespace gpdxl
 						const IMDType *pmdType
 						);
 
-			// preload metadata for a given type
-			static
-			void PreloadMDType(CMDAccessor *pmda, const IMDType *pmdtype);
-
-			// preload helpers
-			static
-			BOOL FPreloadMDStatsWalker(Node *pnode, CContextPreloadMD *pstrtxpreloadmd);
-
-			static
-			void PreloadMDStats(IMemoryPool *pmp, CMDAccessor *pmda, OID oidRelation);
-
-			// preload basic information in the MD cache, including base types
-			// and MD objects referenced in the given query
-			static
-			void PreloadMD(IMemoryPool *pmp, CMDAccessor *pmda, CSystemId sysid, Query *pquery);
-
 			// return the dxl representation of the set operation
 			static
 			EdxlSetOpType Edxlsetop(SetOperation setop, BOOL fAll);
-
-			// make copy of the TE map
-			static
-			TEMap *PtemapCopy(IMemoryPool *pmp, TEMap *ptemap);
-
-			// return the set operator type
-			static
-			SetOperation Setoptype(EdxlSetOpType edxlsetop);
 
 			// return the GPDB frame exclusion strategy from its corresponding DXL representation
 			static

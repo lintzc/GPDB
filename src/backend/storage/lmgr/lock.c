@@ -2054,7 +2054,7 @@ AtPrepare_Locks(void)
 		 * destroyed at the end of the session, while the transaction will be
 		 * committed from another session.
 		 */
-		/* GPDB_83MERGE_FIXME: see previous comments on removing LockTagIsTemp */
+		/* GPDB_83_MERGE_FIXME: see previous comments on removing LockTagIsTemp */
 #if 0
 		if (LockTagIsTemp(&locallock->tag.lock))
 			continue;
@@ -2145,7 +2145,7 @@ PostPrepare_Locks(TransactionId xid)
 		 * objects. MPP-1094: NOTE THIS CALL MAY ADD LOCKS TO OUR
 		 * TABLE!
 		 */
-		/* GPDB_83MERGE_FIXME: LockTagIsTemp() was removed in the merge,
+		/* GPDB_83_MERGE_FIXME: LockTagIsTemp() was removed in the merge,
 		 * by upstream commit f3032cbe377ecc570989e1bd2fe1aea455c12cc3. It's
 		 * not clear to me if it's still safe to skip over temp objects. I'm
 		 * pretty sure we must allow modifying temp tables in GPDB, because
@@ -2209,17 +2209,16 @@ PostPrepare_Locks(TransactionId xid)
 
 			lock = proclock->tag.myLock;
 
+			/* MPP change for support of temp objects in 2PC.
+			 *
+			 * The case where the releaseMask is different than the holdMask is only
+			 * for session locks.  Temp objects is the only session lock we could
+			 * have here and we DO NOT want to release this lock.  so we
+			 * skip over it.
+			 */
+			if (proclock->releaseMask != proclock->holdMask)
+				goto next_item;
 
-		/* MPP change for support of temp objects in 2PC.
-		 *
-		 * The case where the releaseMask is different than the holdMask is only
-		 * for session locks.  Temp objects is the only session lock we could 
-		 * have here and we DO NOT want to release this lock.  so we
-		 * skip over it.
-		 */
-		if (proclock->releaseMask != proclock->holdMask)
-			goto next_item;
-			
 			/* Ignore nontransactional locks */
 			if (!LockMethods[LOCK_LOCKMETHOD(*lock)]->transactional)
 				goto next_item;

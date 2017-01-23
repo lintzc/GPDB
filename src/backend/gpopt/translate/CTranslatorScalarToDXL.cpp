@@ -13,7 +13,6 @@
 //
 //---------------------------------------------------------------------------
 
-#define ALLOW_isnan
 #include "postgres.h"
 #include "nodes/plannodes.h"
 #include "nodes/parsenodes.h"
@@ -68,8 +67,6 @@ CTranslatorScalarToDXL::CTranslatorScalarToDXL
 	CIdGenerator *pulidgtorCTE,
 	ULONG ulQueryLevel,
 	BOOL fQuery,
-	PlannedStmt *pplstmt,
-	CMappingParamIdScalarId *pmapps,
 	HMUlCTEListEntry *phmulCTEEntries,
 	DrgPdxln *pdrgpdxlnCTE
 	)
@@ -81,13 +78,10 @@ CTranslatorScalarToDXL::CTranslatorScalarToDXL
 	m_ulQueryLevel(ulQueryLevel),
 	m_fHasDistributedTables(false),
 	m_fQuery(fQuery),
-	m_pplstmt(pplstmt),
-	m_pparammapping(pmapps),
 	m_eplsphoptype(EpspotNone),
 	m_phmulCTEEntries(phmulCTEEntries),
 	m_pdrgpdxlnCTE(pdrgpdxlnCTE)
 {
-	GPOS_ASSERT_IMP(!fQuery, pplstmt);
 }
 
 //---------------------------------------------------------------------------
@@ -190,37 +184,6 @@ CTranslatorScalarToDXL::PdxlnScIdFromVar
 
 //---------------------------------------------------------------------------
 //	@function:
-//		CTranslatorScalarToDXL::PdxlnScIdFromParam
-//
-//	@doc:
-//		Create a DXL node for a scalar ident expression from a GPDB Param expression.
-//		If no mapping can be found, return NULL
-//---------------------------------------------------------------------------
-CDXLNode *
-CTranslatorScalarToDXL::PdxlnScIdFromParam
-	(
-	const Param * pparam
-	)
-    const
-{
-	GPOS_ASSERT(IsA(pparam, Param));
-
-	if (NULL == m_pparammapping)
-	{
-		return NULL;
-	}
-
-	CDXLScalarIdent *pdxlopIdent = m_pparammapping->Pscid(pparam->paramid);
-	if (NULL == pdxlopIdent)
-	{
-		return NULL;
-	}
-
-	return GPOS_NEW(m_pmp) CDXLNode(m_pmp, pdxlopIdent);
-}
-
-//---------------------------------------------------------------------------
-//	@function:
 //		CTranslatorScalarToDXL::PdxlnScOpFromExpr
 //
 //	@doc:
@@ -259,6 +222,7 @@ CTranslatorScalarToDXL::PdxlnScOpFromExpr
 		{T_RelabelType, &CTranslatorScalarToDXL::PdxlnScCastFromRelabelType},
 		{T_CoerceToDomain, &CTranslatorScalarToDXL::PdxlnScCoerceFromCoerce},
 		{T_CoerceViaIO, &CTranslatorScalarToDXL::PdxlnScCoerceFromCoerceViaIO},
+		{T_ArrayCoerceExpr, &CTranslatorScalarToDXL::PdxlnScArrayCoerceExprFromExpr},
 		{T_SubLink, &CTranslatorScalarToDXL::PdxlnFromSublink},
 		{T_ArrayExpr, &CTranslatorScalarToDXL::PdxlnArray},
 		{T_ArrayRef, &CTranslatorScalarToDXL::PdxlnArrayRef},
@@ -1210,6 +1174,52 @@ CTranslatorScalarToDXL::PdxlnScCoerceFromCoerceViaIO
 
         return pdxln;
 }
+
+//---------------------------------------------------------------------------
+//	@function:
+//		CTranslatorScalarToDXL::PdxlnScArrayCoerceExprFromExpr
+//	@doc:
+//		Create a DXL node for a scalar array coerce expression from a
+// 		GPDB Array Coerce expression
+//---------------------------------------------------------------------------
+CDXLNode *
+CTranslatorScalarToDXL::PdxlnScArrayCoerceExprFromExpr
+	(
+	const Expr *pexpr,
+	const CMappingVarColId* pmapvarcolid
+	)
+{
+	GPOS_ASSERT(IsA(pexpr, ArrayCoerceExpr));
+	const ArrayCoerceExpr *parraycoerce = (ArrayCoerceExpr *) pexpr;
+	
+	GPOS_ASSERT(NULL != parraycoerce->arg);
+	
+	CDXLNode *pdxlnChild = PdxlnScOpFromExpr(parraycoerce->arg, pmapvarcolid);
+	
+	GPOS_ASSERT(NULL != pdxlnChild);
+	
+	CDXLNode *pdxln = GPOS_NEW(m_pmp) CDXLNode
+					(
+					m_pmp,
+					GPOS_NEW(m_pmp) CDXLScalarArrayCoerceExpr
+							(
+							m_pmp,
+							GPOS_NEW(m_pmp) CMDIdGPDB(parraycoerce->elemfuncid),
+							GPOS_NEW(m_pmp) CMDIdGPDB(parraycoerce->resulttype),
+							parraycoerce->resulttypmod,
+							parraycoerce->isExplicit,
+							(EdxlCoercionForm) parraycoerce->coerceformat,
+							parraycoerce->location
+							)
+					);
+	
+        pdxln->AddChild(pdxlnChild);
+
+        return pdxln;
+}
+
+
+
 
 //---------------------------------------------------------------------------
 //	@function:

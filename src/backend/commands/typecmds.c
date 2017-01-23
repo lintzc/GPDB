@@ -95,12 +95,13 @@ static char *domainAddConstraint(Oid domainOid, Oid domainNamespace,
 					char *domainName);
 static void remove_type_encoding(Oid typid);
 
+
 /*
  * DefineType
  *		Registers a new type.
  */
 void
-DefineType(List *names, List *parameters, Oid newOid, Oid newArrayOid)
+DefineType(List *names, List *parameters)
 {
 	char	   *typeName;
 	Oid			typeNamespace;
@@ -169,7 +170,7 @@ DefineType(List *names, List *parameters, Oid newOid, Oid newArrayOid)
 	 */
 	if (!OidIsValid(typoid))
 	{
-		typoid = TypeShellMake(typeName, typeNamespace, GetUserId(), newOid);
+		typoid = TypeShellMake(typeName, typeNamespace, GetUserId());
 		/* Make new shell type visible for modification below */
 		CommandCounterIncrement();
 
@@ -188,13 +189,11 @@ DefineType(List *names, List *parameters, Oid newOid, Oid newArrayOid)
 				stmt->defnames = names;
 				stmt->args = NIL;
 				stmt->definition = NIL;
-				stmt->newOid = typoid;
-				stmt->arrayOid = newArrayOid;
-				stmt->commutatorOid = stmt->negatorOid = InvalidOid;
 				CdbDispatchUtilityStatement((Node *) stmt,
 											DF_CANCEL_ON_ERROR|
 											DF_WITH_SNAPSHOT|
 											DF_NEED_TWO_PHASE,
+											GetAssignedOidsForDispatch(),
 											NULL);
 			}
 			return;
@@ -442,20 +441,27 @@ DefineType(List *names, List *parameters, Oid newOid, Oid newArrayOid)
 		aclcheck_error(ACLCHECK_NOT_OWNER, ACL_KIND_PROC,
 					   NameListToString(analyzeName));
 
-	/* Preassign array type OID so we can insert it in pg_type.typarray */
+	array_type = makeArrayTypeName(typeName, typeNamespace);
 	pg_type = heap_open(TypeRelationId, AccessShareLock);
-	array_oid = newArrayOid;
-	if (!OidIsValid(array_oid))
+
+	/* Preassign array type OID so we can insert it in pg_type.typarray */
+	if (Gp_role == GP_ROLE_EXECUTE || IsBinaryUpgrade)
 	{
-		array_oid = GetNewOid(pg_type);
+		array_oid = GetPreassignedOidForType(typeNamespace, array_type);
+
+		if (array_oid == InvalidOid && IsBinaryUpgrade)
+			array_oid = GetNewOid(pg_type);
 	}
+	else
+		array_oid = GetNewOid(pg_type);
+
 	heap_close(pg_type, AccessShareLock);
 
 	/*
 	 * now have TypeCreate do all the real work.
 	 */
 	typoid =
-		TypeCreateWithOptions(newOid,
+		TypeCreateWithOptions(InvalidOid,	/* no predetermined type OID */
 				   typeName,	/* type name */
 				   typeNamespace,		/* namespace */
 				   InvalidOid,	/* relation oid (n/a here) */
@@ -488,7 +494,6 @@ DefineType(List *names, List *parameters, Oid newOid, Oid newArrayOid)
 	/*
 	 * Create the array type that goes with it.
 	 */
-	array_type = makeArrayTypeName(typeName, typeNamespace);
 
 	/* alignment must be 'i' or 'd' for arrays */
 	alignment = (alignment == 'd') ? 'd' : 'i';
@@ -533,14 +538,12 @@ DefineType(List *names, List *parameters, Oid newOid, Oid newArrayOid)
 		stmt->defnames = names;
 		stmt->args = NIL;
 		stmt->definition = parameters;
-		stmt->newOid = typoid;
-		stmt->arrayOid = array_oid;
-		stmt->commutatorOid = stmt->negatorOid = InvalidOid;
 
 		CdbDispatchUtilityStatement((Node *) stmt,
 									DF_CANCEL_ON_ERROR|
 									DF_WITH_SNAPSHOT|
 									DF_NEED_TWO_PHASE,
+									GetAssignedOidsForDispatch(), /* FIXME */
 									NULL);
 	}
 }
@@ -941,7 +944,7 @@ DefineDomain(CreateDomainStmt *stmt)
 	 * Have TypeCreate do all the real work.
 	 */
 	domainoid =
-		TypeCreate(stmt->domainOid,
+		TypeCreate(InvalidOid,	/* no predetermined type OID */
 				   domainName,	/* type name */
 				   domainNamespace,		/* namespace */
 				   InvalidOid,	/* relation oid (n/a here) */
@@ -970,7 +973,6 @@ DefineDomain(CreateDomainStmt *stmt)
 				   typNDims,	/* Array dimensions for base type */
 				   typNotNull	/* Type NOT NULL */);
 
-	stmt->domainOid = domainoid;
 	/*
 	 * Process constraints which refer to the domain ID returned by TypeCreate
 	 */
@@ -1009,6 +1011,7 @@ DefineDomain(CreateDomainStmt *stmt)
 									DF_CANCEL_ON_ERROR|
 									DF_WITH_SNAPSHOT|
 									DF_NEED_TWO_PHASE,
+									GetAssignedOidsForDispatch(),
 									NULL);
 	}
 }
@@ -1127,17 +1130,26 @@ DefineEnum(CreateEnumStmt *stmt)
 					 errmsg("type \"%s\" already exists", enumName)));
 	}
 
+	enumArrayName = makeArrayTypeName(enumName, enumNamespace);
+
 	/* Preassign array type OID so we can insert it in pg_type.typarray */
 	pg_type = heap_open(TypeRelationId, AccessShareLock);
-	if (OidIsValid(stmt->enumArrayOid))
-		enumArrayOid = stmt->enumArrayOid;
+
+	if (Gp_role == GP_ROLE_EXECUTE || IsBinaryUpgrade)
+	{
+		enumTypeOid = GetPreassignedOidForType(enumNamespace, enumName);
+		enumArrayOid = GetPreassignedOidForType(enumNamespace, enumArrayName);
+	}
 	else
+	{
+		enumTypeOid = InvalidOid;
 		enumArrayOid = GetNewOid(pg_type);
+	}
 	heap_close(pg_type, AccessShareLock);
 
 	/* Create the pg_type entry */
 	enumTypeOid =
-		TypeCreate(stmt->enumTypeOid,
+		TypeCreate(enumTypeOid,
 				   enumName,	/* type name */
 				   enumNamespace,		/* namespace */
 				   InvalidOid,	/* relation oid (n/a here) */
@@ -1165,17 +1177,13 @@ DefineEnum(CreateEnumStmt *stmt)
 				   -1,			/* typMod (Domains only) */
 				   0,			/* Array dimensions of typbasetype */
 				   false);		/* Type NOT NULL */
-	stmt->enumTypeOid = enumTypeOid;
-	stmt->enumArrayOid = enumArrayOid;
 
 	/* Enter the enum's values into pg_enum */
-	EnumValuesCreate(enumTypeOid, stmt->vals, &stmt->valOids);
+	EnumValuesCreate(enumTypeOid, stmt->vals);
 
 	/*
 	 * Create the array type that goes with it.
 	 */
-	enumArrayName = makeArrayTypeName(enumName, enumNamespace);
-
 	TypeCreate(enumArrayOid,	/* force assignment of this type OID */
 			   enumArrayName,	/* type name */
 			   enumNamespace,	/* namespace */
@@ -1212,6 +1220,7 @@ DefineEnum(CreateEnumStmt *stmt)
 									DF_CANCEL_ON_ERROR|
 									DF_WITH_SNAPSHOT|
 									DF_NEED_TWO_PHASE,
+									GetAssignedOidsForDispatch(),
 									NULL);
 }
 
@@ -1492,19 +1501,10 @@ findTypeAnalyzeFunction(List *procname, Oid typeOid)
  *-------------------------------------------------------------------
  */
 Oid
-DefineCompositeType(const RangeVar *typevar, List *coldeflist, Oid relOid, Oid comptypeOid)
+DefineCompositeType(const RangeVar *typevar, List *coldeflist)
 {
 	CreateStmt *createStmt = makeNode(CreateStmt);
 
-	createStmt->oidInfo.relOid = relOid;
-	createStmt->oidInfo.comptypeOid = comptypeOid;
-	createStmt->oidInfo.toastOid = 0;
-	createStmt->oidInfo.toastIndexOid = 0;
-	createStmt->oidInfo.aosegOid = 0;
-	createStmt->oidInfo.aoblkdirOid = 0;
-	createStmt->oidInfo.aoblkdirIndexOid = 0;
-	createStmt->oidInfo.aovisimapOid = 0;
-	createStmt->oidInfo.aovisimapIndexOid = 0;
 	createStmt->ownerid = GetUserId();
 
 	if (coldeflist == NIL)
@@ -1527,7 +1527,7 @@ DefineCompositeType(const RangeVar *typevar, List *coldeflist, Oid relOid, Oid c
 	/*
 	 * finally create the relation...
 	 */
-	return  DefineRelation(createStmt, RELKIND_COMPOSITE_TYPE, RELSTORAGE_VIRTUAL);
+	return  DefineRelation(createStmt, RELKIND_COMPOSITE_TYPE, RELSTORAGE_VIRTUAL, true);
 
 	/*
 	 * DefineRelation already dispatches this.
@@ -1537,8 +1537,6 @@ DefineCompositeType(const RangeVar *typevar, List *coldeflist, Oid relOid, Oid c
 		CompositeTypeStmt *stmt = makeNode(CompositeTypeStmt);
 		stmt->typevar = (RangeVar *)typevar;
 		stmt->coldeflist = coldeflist;
-		stmt->relOid = newRelOid;
-		stmt->comptypeOid = createStmt->comptypeOid;
 
 		CdbDispatchUtilityStatement((Node *) stmt);
 	}*/
@@ -1572,7 +1570,7 @@ AlterDomainDefault(List *names, Node *defaultRaw)
 
 	/* Look up the domain in the type table */
 	rel = heap_open(TypeRelationId, RowExclusiveLock);
-	
+
 	tup = SearchSysCacheCopy(TYPEOID,
 							 ObjectIdGetDatum(domainoid),
 							 0, 0, 0);
@@ -2328,29 +2326,28 @@ domainAddConstraint(Oid domainOid, Oid domainNamespace, Oid baseTypeOid,
 	/*
 	 * Store the constraint in pg_constraint
 	 */
-	constr->conoid = CreateConstraintEntry(constr->name, /* Constraint Name */
-										   constr->conoid,	/* Constraint Oid */
-										   domainNamespace,		/* namespace */
-										   CONSTRAINT_CHECK,		/* Constraint Type */
-										   false,	/* Is Deferrable */
-										   false,	/* Is Deferred */
-										   InvalidOid,	/* not a relation constraint */
-										   NULL,
-										   0,
-										   domainOid,	/* domain constraint */
-										   InvalidOid,	/* Foreign key fields */
-										   NULL,
-										   NULL,
-										   NULL,
-										   NULL,
-										   0,
-										   ' ',
-										   ' ',
-										   ' ',
-										   InvalidOid,
-										   expr, /* Tree form check constraint */
-										   ccbin,	/* Binary form check constraint */
-										   ccsrc);		/* Source form check constraint */
+	CreateConstraintEntry(constr->name, /* Constraint Name */
+						  domainNamespace,		/* namespace */
+						  CONSTRAINT_CHECK,		/* Constraint Type */
+						  false,	/* Is Deferrable */
+						  false,	/* Is Deferred */
+						  InvalidOid,	/* not a relation constraint */
+						  NULL,
+						  0,
+						  domainOid,	/* domain constraint */
+						  InvalidOid,	/* Foreign key fields */
+						  NULL,
+						  NULL,
+						  NULL,
+						  NULL,
+						  0,
+						  ' ',
+						  ' ',
+						  ' ',
+						  InvalidOid,
+						  expr, /* Tree form check constraint */
+						  ccbin,	/* Binary form check constraint */
+						  ccsrc);		/* Source form check constraint */
 
 	/*
 	 * Return the compiled constraint expression so the calling routine can
@@ -2540,16 +2537,6 @@ AlterTypeOwner(List *names, Oid newOwnerId)
 				 errhint("You can alter type %s, which will alter the array type as well.",
 						 format_type_be(typTup->typelem))));
 
-	/* don't allow direct alteration of array types, either */
-	if (OidIsValid(typTup->typelem) &&
-		get_array_type(typTup->typelem) == typeOid)
-		ereport(ERROR,
-				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("cannot alter array type %s",
-						format_type_be(typeOid)),
-				 errhint("You can alter type %s, which will alter the array type as well.",
-						 format_type_be(typTup->typelem))));
-
 	/*
 	 * If the new owner is the same as the existing owner, consider the
 	 * command to have succeeded.  This is for dump restoration purposes.
@@ -2630,9 +2617,7 @@ AlterTypeOwnerInternal(Oid typeOid, Oid newOwnerId,
 
 	rel = heap_open(TypeRelationId, RowExclusiveLock);
 
-	tup = SearchSysCacheCopy(TYPEOID,
-							 ObjectIdGetDatum(typeOid),
-							 0, 0, 0);
+	tup = SearchSysCacheCopy1(TYPEOID, ObjectIdGetDatum(typeOid));
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "cache lookup failed for type %u", typeOid);
 	typTup = (Form_pg_type) GETSTRUCT(tup);
@@ -2667,19 +2652,29 @@ AlterTypeNamespace(List *names, const char *newschema)
 	TypeName   *typename;
 	Oid			typeOid;
 	Oid			nspOid;
-	Oid			elemOid;
+	ObjectAddresses *objsMoved;
 
 	/* Make a TypeName so we can use standard type lookup machinery */
 	typename = makeTypeNameFromNameList(names);
 	typeOid = typenameTypeId(NULL, typename, NULL);
 
+	/* get schema OID and check its permissions */
+	nspOid = LookupCreationNamespace(newschema);
+
+	objsMoved = new_object_addresses();
+	AlterTypeNamespace_oid(typeOid, nspOid, objsMoved);
+	free_object_addresses(objsMoved);
+}
+
+Oid
+AlterTypeNamespace_oid(Oid typeOid, Oid nspOid, ObjectAddresses *objsMoved)
+{
+	Oid			elemOid;
+
 	/* check permissions on type */
 	if (!pg_type_ownercheck(typeOid, GetUserId()))
 		aclcheck_error(ACLCHECK_NOT_OWNER, ACL_KIND_TYPE,
 					   format_type_be(typeOid));
-
-	/* get schema OID and check its permissions */
-	nspOid = LookupCreationNamespace(newschema);
 
 	/* don't allow direct alteration of array types */
 	elemOid = get_element_type(typeOid);
@@ -2692,7 +2687,7 @@ AlterTypeNamespace(List *names, const char *newschema)
 						 format_type_be(elemOid))));
 
 	/* and do the work */
-	AlterTypeNamespaceInternal(typeOid, nspOid, false, true);
+	return AlterTypeNamespaceInternal(typeOid, nspOid, false, true, objsMoved);
 }
 
 /*
@@ -2707,11 +2702,14 @@ AlterTypeNamespace(List *names, const char *newschema)
  * If errorOnTableType is TRUE, the function errors out if the type is
  * a table type.  ALTER TABLE has to be used to move a table to a new
  * namespace.
+ *
+ * Returns the type's old namespace OID.
  */
-void
+Oid
 AlterTypeNamespaceInternal(Oid typeOid, Oid nspOid,
 						   bool isImplicitArray,
-						   bool errorOnTableType)
+						   bool errorOnTableType,
+						   ObjectAddresses *objsMoved)
 {
 	Relation	rel;
 	HeapTuple	tup;
@@ -2719,12 +2717,18 @@ AlterTypeNamespaceInternal(Oid typeOid, Oid nspOid,
 	Oid			oldNspOid;
 	Oid			arrayOid;
 	bool		isCompositeType;
+	ObjectAddress thisobj;
+
+	thisobj.classId = TypeRelationId;
+	thisobj.objectId = typeOid;
+	thisobj.objectSubId = 0;
+
+	if (object_address_present(&thisobj, objsMoved))
+		return InvalidOid;
 
 	rel = heap_open(TypeRelationId, RowExclusiveLock);
 
-	tup = SearchSysCacheCopy(TYPEOID,
-							 ObjectIdGetDatum(typeOid),
-							 0, 0, 0);
+	tup = SearchSysCacheCopy1(TYPEOID, ObjectIdGetDatum(typeOid));
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "cache lookup failed for type %u", typeOid);
 	typform = (Form_pg_type) GETSTRUCT(tup);
@@ -2732,36 +2736,13 @@ AlterTypeNamespaceInternal(Oid typeOid, Oid nspOid,
 	oldNspOid = typform->typnamespace;
 	arrayOid = typform->typarray;
 
-	if (oldNspOid == nspOid)
-		ereport(ERROR,
-				(errcode(ERRCODE_DUPLICATE_OBJECT),
-				 errmsg("type %s is already in schema \"%s\"",
-						format_type_be(typeOid),
-						get_namespace_name(nspOid))));
-
-	/* disallow renaming into or out of temp schemas */
-	if (isAnyTempNamespace(nspOid) || isAnyTempNamespace(oldNspOid))
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-			errmsg("cannot move objects into or out of temporary schemas")));
-
-	/* same for TOAST schema */
-	if (nspOid == PG_TOAST_NAMESPACE || oldNspOid == PG_TOAST_NAMESPACE)
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("cannot move objects into or out of TOAST schema")));
-
-	/* same for AO SEGMENT schema */
-	if (nspOid == PG_AOSEGMENT_NAMESPACE || oldNspOid == PG_AOSEGMENT_NAMESPACE)
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("cannot move objects into or out of AO SEGMENT schema")));
+	/* common checks on switching namespaces */
+	CheckSetNamespace(oldNspOid, nspOid, TypeRelationId, typeOid);
 
 	/* check for duplicate name (more friendly than unique-index failure) */
-	if (SearchSysCacheExists(TYPENAMENSP,
-							 CStringGetDatum(NameStr(typform->typname)),
-							 ObjectIdGetDatum(nspOid),
-							 0, 0))
+	if (SearchSysCacheExists2(TYPENAMENSP,
+							  CStringGetDatum(NameStr(typform->typname)),
+							  ObjectIdGetDatum(nspOid)))
 		ereport(ERROR,
 				(errcode(ERRCODE_DUPLICATE_OBJECT),
 				 errmsg("type \"%s\" already exists in schema \"%s\"",
@@ -2804,7 +2785,7 @@ AlterTypeNamespaceInternal(Oid typeOid, Oid nspOid,
 
 		AlterRelationNamespaceInternal(classRel, typform->typrelid,
 									   oldNspOid, nspOid,
-									   false);
+									   false, objsMoved);
 
 		heap_close(classRel, RowExclusiveLock);
 
@@ -2813,13 +2794,13 @@ AlterTypeNamespaceInternal(Oid typeOid, Oid nspOid,
 		 * currently support this, but probably will someday).
 		 */
 		AlterConstraintNamespaces(typform->typrelid, oldNspOid,
-								  nspOid, false);
+								  nspOid, false, objsMoved);
 	}
 	else
 	{
 		/* If it's a domain, it might have constraints */
 		if (typform->typtype == TYPTYPE_DOMAIN)
-			AlterConstraintNamespaces(typeOid, oldNspOid, nspOid, true);
+			AlterConstraintNamespaces(typeOid, oldNspOid, nspOid, true, objsMoved);
 	}
 
 	/*
@@ -2837,9 +2818,13 @@ AlterTypeNamespaceInternal(Oid typeOid, Oid nspOid,
 
 	heap_close(rel, RowExclusiveLock);
 
+	add_exact_object_address(&thisobj, objsMoved);
+
 	/* Recursively alter the associated array type, if any */
 	if (OidIsValid(arrayOid))
-		AlterTypeNamespaceInternal(arrayOid, nspOid, true, true);
+		AlterTypeNamespaceInternal(arrayOid, nspOid, true, true, objsMoved);
+
+	return oldNspOid;
 }
 
 /*
@@ -2965,6 +2950,7 @@ AlterType(AlterTypeStmt *stmt)
 									DF_CANCEL_ON_ERROR|
 									DF_WITH_SNAPSHOT|
 									DF_NEED_TWO_PHASE,
+									NIL, /* FIXME */
 									NULL);
 }
 

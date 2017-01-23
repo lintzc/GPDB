@@ -61,12 +61,11 @@ CATALOG(gp_persistent_relation_node,5090) BKI_SHARED_RELATION BKI_WITHOUT_OIDS
 	int4		relation_bufpool_kind;
 	int4		parent_xid;
 	int8		persistent_serial_num;
-	tid			previous_free_tid;
 } FormData_gp_persistent_relation_node;
 
 /* FIXME: no foreign keys defined */
 
-#define Natts_gp_persistent_relation_node				    				  					19
+#define Natts_gp_persistent_relation_node				    				  					18
 #define Anum_gp_persistent_relation_node_tablespace_oid  					  					1
 #define Anum_gp_persistent_relation_node_database_oid   					  					2
 #define Anum_gp_persistent_relation_node_relfilenode_oid					  					3
@@ -85,7 +84,6 @@ CATALOG(gp_persistent_relation_node,5090) BKI_SHARED_RELATION BKI_WITHOUT_OIDS
 #define Anum_gp_persistent_relation_node_relation_bufpool_kind									16
 #define Anum_gp_persistent_relation_node_parent_xid  						  					17
 #define Anum_gp_persistent_relation_node_persistent_serial_num     			  					18
-#define Anum_gp_persistent_relation_node_previous_free_tid  				  					19
  
 typedef FormData_gp_persistent_relation_node *Form_gp_persistent_relation_node;
 
@@ -115,7 +113,6 @@ typedef FormData_gp_persistent_relation_node *Form_gp_persistent_relation_node;
 { GpPersistentRelationNodeRelationId, {"relation_bufpool_kind"},								23, -1, 4, 16, 0, -1, -1, true, 'p', 'i', true, false, false, true, 0 }, \
 { GpPersistentRelationNodeRelationId, {"parent_xid"},											23, -1, 4, 17, 0, -1, -1, true, 'p', 'i', true, false, false, true, 0 }, \
 { GpPersistentRelationNodeRelationId, {"persistent_serial_num"},								20, -1, 8, 18, 0, -1, -1, true, 'p', 'd', true, false, false, true, 0 }, \
-{ GpPersistentRelationNodeRelationId, {"previous_free_tid"},									27, -1, 6, 19, 0, -1, -1, false, 'p', 's', true, false, false, true, 0 }
 
 /*
  * gp_persistent_relation_node table values for FormData_pg_class.
@@ -137,6 +134,7 @@ typedef FormData_gp_persistent_relation_node *Form_gp_persistent_relation_node;
 
 CATALOG(gp_relation_node,5094) BKI_WITHOUT_OIDS
 {
+	Oid         tablespace_oid;
 	Oid			relfilenode_oid;
 	int4		segment_file_num;
 	int8		create_mirror_data_loss_tracking_session_num;
@@ -144,16 +142,14 @@ CATALOG(gp_relation_node,5094) BKI_WITHOUT_OIDS
 	int8		persistent_serial_num;
 } FormData_gp_relation_node;
 
-/* GPDB added foreign key definitions for gpcheckcat. */
-FOREIGN_KEY(relfilenode_oid REFERENCES pg_class(oid));
+#define Natts_gp_relation_node							6
+#define Anum_gp_relation_node_tablespace_oid					1
+#define Anum_gp_relation_node_relfilenode_oid					2
+#define Anum_gp_relation_node_segment_file_num					3
+#define Anum_gp_relation_node_create_mirror_data_loss_tracking_session_num	4
+#define Anum_gp_relation_node_persistent_tid					5
+#define Anum_gp_relation_node_persistent_serial_num				6
 
-#define Natts_gp_relation_node				    							5
-#define Anum_gp_relation_node_relfilenode_oid								1
-#define Anum_gp_relation_node_segment_file_num								2
-#define Anum_gp_relation_node_create_mirror_data_loss_tracking_session_num	3
-#define Anum_gp_relation_node_persistent_tid      							4
-#define Anum_gp_relation_node_persistent_serial_num     					5
- 
 typedef FormData_gp_relation_node *Form_gp_relation_node;
 
 /*
@@ -163,11 +159,12 @@ typedef FormData_gp_relation_node *Form_gp_relation_node;
  *  pg_attribute.h]
  */
 #define Schema_gp_relation_node \
-{ GpRelationNodeRelationId, {"relfilenode_oid"}, 									26, -1,	4, 1, 0, -1, -1, true, 'p', 'i', true, false, false, true, 0 }, \
-{ GpRelationNodeRelationId, {"segment_file_num"}, 									23, -1, 4, 2, 0, -1, -1, true, 'p', 'i', true, false, false, true, 0 }, \
-{ GpRelationNodeRelationId, {"create_mirror_data_loss_tracking_session_num"}, 		20, -1, 8, 3, 0, -1, -1, true, 'p', 'd', true, false, false, true, 0 }, \
-{ GpRelationNodeRelationId, {"persistent_tid"},										27, -1, 6, 4, 0, -1, -1, false, 'p', 's', true, false, false, true, 0 }, \
-{ GpRelationNodeRelationId, {"persistent_serial_num"},								20, -1, 8, 5, 0, -1, -1, true, 'p', 'd', true, false, false, true, 0 }
+{ GpRelationNodeRelationId, {"tablespace_oid"}, 									26, -1,	4, 1, 0, -1, -1, true, 'p', 'i', true, false, false, true, 0 }, \
+{ GpRelationNodeRelationId, {"relfilenode_oid"}, 									26, -1,	4, 2, 0, -1, -1, true, 'p', 'i', true, false, false, true, 0 }, \
+{ GpRelationNodeRelationId, {"segment_file_num"}, 									23, -1, 4, 3, 0, -1, -1, true, 'p', 'i', true, false, false, true, 0 }, \
+{ GpRelationNodeRelationId, {"create_mirror_data_loss_tracking_session_num"}, 		20, -1, 8, 4, 0, -1, -1, true, 'p', 'd', true, false, false, true, 0 }, \
+{ GpRelationNodeRelationId, {"persistent_tid"},										27, -1, 6, 5, 0, -1, -1, false, 'p', 's', true, false, false, true, 0 }, \
+{ GpRelationNodeRelationId, {"persistent_serial_num"},								20, -1, 8, 6, 0, -1, -1, true, 'p', 'd', true, false, false, true, 0 }
 
 /*
  * gp_relation_node table values for FormData_pg_class.
@@ -181,7 +178,7 @@ typedef FormData_gp_relation_node *Form_gp_relation_node;
 /*
  * gp_relation_node's index.
  */
-#define Natts_gp_relation_node_index				    					2
+#define Natts_gp_relation_node_index				    					3
  
 /*
  * gp_relation_node_index table values for FormData_pg_attribute.
@@ -190,8 +187,9 @@ typedef FormData_gp_relation_node *Form_gp_relation_node;
  *  pg_attribute.h]
  */
 #define Schema_gp_relation_node_index \
-{ GpRelationNodeRelationId, {"relfilenode_oid"}, 	26, -1,	4, 1, 0, -1, -1, true, 'p', 'i', false, false, false, true, 0 }, \
-{ GpRelationNodeRelationId, {"segment_file_num"}, 	23, -1, 4, 2, 0, -1, -1, true, 'p', 'i', false, false, false, true, 0 },
+{ GpRelationNodeRelationId, {"tablespace_oid"}, 	26, -1,	4, 1, 0, -1, -1, true, 'p', 'i', false, false, false, true, 0 }, \
+{ GpRelationNodeRelationId, {"relfilenode_oid"}, 	26, -1,	4, 2, 0, -1, -1, true, 'p', 'i', false, false, false, true, 0 }, \
+{ GpRelationNodeRelationId, {"segment_file_num"}, 	23, -1, 4, 3, 0, -1, -1, true, 'p', 'i', false, false, false, true, 0 },
 
 /*
  * gp_relation_node_index index values for FormData_pg_class.
@@ -224,10 +222,10 @@ typedef FormData_gp_relation_node *Form_gp_relation_node;
 	GpRelationNodeOidIndexId, GpRelationNodeRelationId, Natts_gp_relation_node_index, true, false, false, true, false, true, {Init_int2vector}, {Init_oidvector}, {Init_oidvector}, {Init_text}, {Init_text}
 
 #define IndKey_gp_relation_node_index \
-    1, 2
+    1, 2, 3
 
 #define IndClass_gp_relation_node_index \
-    OID_BTREE_OPS_OID, INT4_BTREE_OPS_OID
+    OID_BTREE_OPS_OID, OID_BTREE_OPS_OID, INT4_BTREE_OPS_OID
 
 /*
  * Defines for gp_persistent_database_node table
@@ -246,12 +244,11 @@ CATALOG(gp_persistent_database_node,5091) BKI_SHARED_RELATION BKI_WITHOUT_OIDS
 	int4		reserved;
 	int4		parent_xid;
 	int8		persistent_serial_num;
-	tid			previous_free_tid;
 } FormData_gp_persistent_database_node;
 
 /* FIXME: no foreign keys defined */
 
-#define Natts_gp_persistent_database_node				    							9
+#define Natts_gp_persistent_database_node				    							8
 #define Anum_gp_persistent_database_node_tablespace_oid  								1
 #define Anum_gp_persistent_database_node_database_oid   								2
 #define Anum_gp_persistent_database_node_persistent_state      							3
@@ -260,7 +257,6 @@ CATALOG(gp_persistent_database_node,5091) BKI_SHARED_RELATION BKI_WITHOUT_OIDS
 #define Anum_gp_persistent_database_node_reserved  										6
 #define Anum_gp_persistent_database_node_parent_xid  									7
 #define Anum_gp_persistent_database_node_persistent_serial_num  						8
-#define Anum_gp_persistent_database_node_previous_free_tid	  							9
  
 typedef FormData_gp_persistent_database_node *Form_gp_persistent_database_node;
 
@@ -280,7 +276,6 @@ typedef FormData_gp_persistent_database_node *Form_gp_persistent_database_node;
 { GpPersistentDatabaseNodeRelationId, {"reserved"},											23, -1, 4, 6, 0, -1, -1, true, 'p', 'i', true, false, false, true, 0 }, \
 { GpPersistentDatabaseNodeRelationId, {"parent_xid"},										23, -1, 4, 7, 0, -1, -1, true, 'p', 'i', true, false, false, true, 0 }, \
 { GpPersistentDatabaseNodeRelationId, {"persistent_serial_num"},							20, -1, 8, 8, 0, -1, -1, true, 'p', 'd', true, false, false, true, 0 }, \
-{ GpPersistentDatabaseNodeRelationId, {"previous_free_tid"},								27, -1, 6, 9, 0, -1, -1, false, 'p', 's', true, false, false, true, 0 }
 
 /*
  * gp_persistent_database_node table values for FormData_pg_class.
@@ -309,12 +304,11 @@ CATALOG(gp_persistent_tablespace_node,5092) BKI_SHARED_RELATION BKI_WITHOUT_OIDS
 	int4		reserved;
 	int4		parent_xid;
 	int8		persistent_serial_num;
-	tid			previous_free_tid;
 } FormData_gp_persistent_tablespace_node;
 
 /* FIXME: no foreign keys defined */
 
-#define Natts_gp_persistent_tablespace_node				    								9
+#define Natts_gp_persistent_tablespace_node				    								8
 #define Anum_gp_persistent_tablespace_node_filespace_oid  									1
 #define Anum_gp_persistent_tablespace_node_tablespace_oid  									2
 #define Anum_gp_persistent_tablespace_node_persistent_state      							3
@@ -323,7 +317,6 @@ CATALOG(gp_persistent_tablespace_node,5092) BKI_SHARED_RELATION BKI_WITHOUT_OIDS
 #define Anum_gp_persistent_tablespace_node_reserved				    						6
 #define Anum_gp_persistent_tablespace_node_parent_xid  										7
 #define Anum_gp_persistent_tablespace_node_persistent_serial_num    						8
-#define Anum_gp_persistent_tablespace_node_previous_free_tid								9
  
 typedef FormData_gp_persistent_tablespace_node *Form_gp_persistent_tablespace_node;
 
@@ -343,7 +336,6 @@ typedef FormData_gp_persistent_tablespace_node *Form_gp_persistent_tablespace_no
 { GpPersistentTablespaceNodeRelationId, {"reserved"}, 										23, -1, 4, 6, 0, -1, -1, true, 'p', 'i', true, false, false, true, 0 }, \
 { GpPersistentTablespaceNodeRelationId, {"parent_xid"},										23, -1, 4, 7, 0, -1, -1, true, 'p', 'i', true, false, false, true, 0 }, \
 { GpPersistentTablespaceNodeRelationId, {"persistent_serial_num"},							20, -1, 8, 8, 0, -1, -1, true, 'p', 'd', true, false, false, true, 0 }, \
-{ GpPersistentTablespaceNodeRelationId, {"previous_free_tid"},								27, -1, 6, 9, 0, -1, -1, false, 'p', 's', true, false, false, true, 0 }
 
 /*
  * gp_persistent_tablespace_node table values for FormData_pg_class.
@@ -375,12 +367,11 @@ CATALOG(gp_persistent_filespace_node,5093) BKI_SHARED_RELATION BKI_WITHOUT_OIDS
 	int4		reserved;
 	int4		parent_xid;
 	int8		persistent_serial_num;
-	tid			previous_free_tid;
 } FormData_gp_persistent_filespace_node;
 
 /* FIXME: no foreign keys defined */
 
-#define Natts_gp_persistent_filespace_node				    	 						12
+#define Natts_gp_persistent_filespace_node				    	 						11
 #define Anum_gp_persistent_filespace_node_filespace_oid  		 						1
 #define Anum_gp_persistent_filespace_node_db_id_1  				 						2
 #define Anum_gp_persistent_filespace_node_location_1			 						3
@@ -392,7 +383,6 @@ CATALOG(gp_persistent_filespace_node,5093) BKI_SHARED_RELATION BKI_WITHOUT_OIDS
 #define Anum_gp_persistent_filespace_node_reserved				 						9
 #define Anum_gp_persistent_filespace_node_parent_xid  			 						10
 #define Anum_gp_persistent_filespace_node_persistent_serial_num  						11
-#define Anum_gp_persistent_filespace_node_previous_free_tid		 						12
  
 typedef FormData_gp_persistent_filespace_node *Form_gp_persistent_filespace_node;
 
@@ -417,7 +407,6 @@ typedef FormData_gp_persistent_filespace_node *Form_gp_persistent_filespace_node
 { GpPersistentFilespaceNodeRelationId, {"reserved"},										23, -1, 4, 9, 0, -1, -1, true, 'p', 'i', false, false, false, true, 0 }, \
 { GpPersistentFilespaceNodeRelationId, {"parent_xid"},										23, -1, 4, 10, 0, -1, -1, true, 'p', 'i', false, false, false, true, 0 }, \
 { GpPersistentFilespaceNodeRelationId, {"persistent_serial_num"},							20, -1, 8, 11, 0, -1, -1, true, 'p', 'd', false, false, false, true, 0 }, \
-{ GpPersistentFilespaceNodeRelationId, {"previous_free_tid"},								27, -1, 6, 12, 0, -1, -1, false, 'p', 's', false, false, false, true, 0 }
 
 /*
  * gp_persistent_filespace_node table values for FormData_pg_class.
@@ -502,8 +491,7 @@ extern void GpPersistentRelationNode_GetValues(
 	int64									*mirrorAppendOnlyNewEof,
 	PersistentFileSysRelBufpoolKind 		*relBufpoolKind,
 	TransactionId							*parentXid,
-	int64									*persistentSerialNum,
-	ItemPointerData 						*previousFreeTid);
+	int64									*persistentSerialNum);
 
 extern void GpPersistentRelationNode_SetDatumValues(
 	Datum									*values,
@@ -525,8 +513,7 @@ extern void GpPersistentRelationNode_SetDatumValues(
 	int64									mirrorAppendOnlyNewEof,
 	PersistentFileSysRelBufpoolKind 		relBufpoolKind,
 	TransactionId							parentXid,
-	int64									persistentSerialNum,
-	ItemPointerData 						*previousFreeTid);
+	int64									persistentSerialNum);
 
 extern void GpPersistentDatabaseNode_GetValues(
 	Datum							*values,
@@ -538,8 +525,7 @@ extern void GpPersistentDatabaseNode_GetValues(
 	MirroredObjectExistenceState 	*mirrorExistenceState,
 	int32							*reserved,
 	TransactionId					*parentXid,
-	int64							*persistentSerialNum,
-	ItemPointerData 				*previousFreeTid);
+	int64							*persistentSerialNum);
 
 extern void GpPersistentDatabaseNode_SetDatumValues(
 	Datum							*values,
@@ -551,8 +537,7 @@ extern void GpPersistentDatabaseNode_SetDatumValues(
 	MirroredObjectExistenceState	mirrorExistenceState,
 	int32							reserved,
 	TransactionId					parentXid,
-	int64							persistentSerialNum,
-	ItemPointerData 				*previousFreeTid);
+	int64							persistentSerialNum);
 
 extern void GpPersistentTablespaceNode_GetValues(
 	Datum							*values,
@@ -564,8 +549,7 @@ extern void GpPersistentTablespaceNode_GetValues(
 	MirroredObjectExistenceState	*mirrorExistenceState,
 	int32							*reserved,
 	TransactionId					*parentXid,
-	int64							*persistentSerialNum,
-	ItemPointerData 				*previousFreeTid);
+	int64							*persistentSerialNum);
 
 extern void GpPersistentTablespaceNode_SetDatumValues(
 	Datum							*values,
@@ -577,8 +561,7 @@ extern void GpPersistentTablespaceNode_SetDatumValues(
 	MirroredObjectExistenceState	mirrorExistenceState,
 	int32							reserved,
 	TransactionId					parentXid,
-	int64							persistentSerialNum,
-	ItemPointerData 				*previousFreeTid);
+	int64							persistentSerialNum);
 
 extern void GpPersistentFilespaceNode_GetValues(
 	Datum							*values,
@@ -593,8 +576,7 @@ extern void GpPersistentFilespaceNode_GetValues(
 	MirroredObjectExistenceState	*mirrorExistenceState,
 	int32							*reserved,
 	TransactionId					*parentXid,
-	int64							*persistentSerialNum,
-	ItemPointerData 				*previousFreeTid);
+	int64							*persistentSerialNum);
 
 extern void GpPersistentFilespaceNode_SetDatumValues(
 	Datum							*values,
@@ -609,8 +591,7 @@ extern void GpPersistentFilespaceNode_SetDatumValues(
 	MirroredObjectExistenceState	mirrorExistenceState,
 	int32							reserved,
 	TransactionId					parentXid,
-	int64							persistentSerialNum,
-	ItemPointerData 				*previousFreeTid);
+	int64							persistentSerialNum);
 
 extern void GpPersistent_GetCommonValues(
 	PersistentFsObjType 			fsObjType,
@@ -633,7 +614,7 @@ extern void GpRelationNode_GetValues(
 
 extern void GpRelationNode_SetDatumValues(
 	Datum							*values,
-
+	Oid 							tablespaceOid,
 	Oid 							relfilenodeOid,
 	int32							segmentFileNum,
 	int64							createMirrorDataLossTrackingSessionNum,

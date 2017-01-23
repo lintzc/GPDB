@@ -40,6 +40,7 @@
 #include "cdb/memquota.h"
 #include "executor/spi.h"
 
+
 /*
  * ActivePortal is the currently executing Portal (the most closely nested,
  * if there are several).
@@ -48,7 +49,7 @@ Portal		ActivePortal = NULL;
 
 static void ProcessQuery(Portal portal, /* Resource queueing need SQL, so we pass portal. */
 			 PlannedStmt *stmt,
-             ParamListInfo params,
+			 ParamListInfo params,
 			 DestReceiver *dest,
 			 char *completionTag);
 static void FillPortalStore(Portal portal, bool isTopLevel);
@@ -101,7 +102,6 @@ CreateQueryDesc(PlannedStmt *plannedstmt,
 	qd->tupDesc = NULL;
 	qd->estate = NULL;
 	qd->planstate = NULL;
-	qd->memoryAccount = NULL;
 
 	qd->extended_query = false; /* default value */
 	qd->portal_name = NULL;
@@ -109,7 +109,7 @@ CreateQueryDesc(PlannedStmt *plannedstmt,
 	qd->ddesc = NULL;
 	qd->gpmon_pkt = NULL;
 	
-    if (Gp_role != GP_ROLE_EXECUTE)
+	if (Gp_role != GP_ROLE_EXECUTE)
 	{
 		increment_command_count();
 
@@ -141,7 +141,7 @@ CreateUtilityQueryDesc(Node *utilitystmt,
 					   ParamListInfo params)
 {
 	QueryDesc  *qd = (QueryDesc *) palloc(sizeof(QueryDesc));
-	
+
 	qd->operation = CMD_UTILITY;	/* operation */
 	qd->plannedstmt = NULL;
 	qd->utilitystmt = utilitystmt;		/* utility command */
@@ -151,15 +151,15 @@ CreateUtilityQueryDesc(Node *utilitystmt,
 	qd->dest = dest;			/* output dest */
 	qd->params = params;		/* parameter values passed into query */
 	qd->doInstrument = false;	/* uninteresting for utilities */
-	
+
 	/* null these fields until set by ExecutorStart */
 	qd->tupDesc = NULL;
 	qd->estate = NULL;
 	qd->planstate = NULL;
-	
+
 	qd->extended_query = false; /* default value */
 	qd->portal_name = NULL;
-	
+
 	return qd;
 }
 
@@ -198,17 +198,16 @@ FreeQueryDesc(QueryDesc *qdesc)
 static void
 ProcessQuery(Portal portal,
 			 PlannedStmt *stmt,
-             ParamListInfo params,
+			 ParamListInfo params,
 			 DestReceiver *dest,
 			 char *completionTag)
 {
 	QueryDesc  *queryDesc;
-	Oid			truncOid = InvalidOid;
-	
+
 	/* auto-stats related */
 	Oid	relationOid = InvalidOid; 	/* relation that is modified */
 	AutoStatsCmdType cmdType = AUTOSTATS_CMDTYPE_SENTINEL; 	/* command type */
-	
+
 	elog(DEBUG3, "ProcessQuery");
 
 	/*
@@ -221,7 +220,7 @@ ProcessQuery(Portal portal,
 	 * Create the QueryDesc object
 	 */
 	Assert(portal);
-	
+
 	if (portal->sourceTag == T_SelectStmt && gp_select_invisible)
 		queryDesc = CreateQueryDesc(stmt, portal->sourceText,
 									SnapshotAny, InvalidSnapshot,
@@ -233,7 +232,7 @@ ProcessQuery(Portal portal,
 	queryDesc->ddesc = portal->ddesc;
 
 	if (gp_enable_gpperfmon && Gp_role == GP_ROLE_DISPATCH)
-	{			
+	{
 		Assert(portal->sourceText);
 		gpmon_qlog_query_submit(queryDesc->gpmon_pkt);
 		gpmon_qlog_query_text(queryDesc->gpmon_pkt,
@@ -311,7 +310,7 @@ ProcessQuery(Portal portal,
 				snprintf(completionTag, COMPLETION_TAG_BUFSIZE,
 						 "SELECT " UINT64_FORMAT "", queryDesc->es_processed);
 				break;
-			case CMD_INSERT:	
+			case CMD_INSERT:
 				if (queryDesc->es_processed == 1)
 					lastOid = queryDesc->es_lastoid;
 				else
@@ -335,34 +334,6 @@ ProcessQuery(Portal portal,
 
 	if (Gp_role == GP_ROLE_DISPATCH)
 	{
-		/*
-		 * MPP-4145: truncate using saved Oid from earlier.
-		 */
-		if (OidIsValid(truncOid))
-		{
-			TruncateStmt *truncStmt = NULL;
-			RangeVar   *truncRel;
-			char	*schemaName;
-			char	*relName;
-
-			truncStmt = makeNode(TruncateStmt);
-			truncStmt->behavior = DROP_RESTRICT; /* don't cascade */
-			truncStmt->relations = NIL;
-
-			schemaName = get_namespace_name(get_rel_namespace(truncOid));
-			relName = get_rel_name(truncOid);
-			if (schemaName != NULL && relName != NULL)
-			{
-				elog(DEBUG1, "converting delete into truncate on %s.%s", schemaName, relName);
-
-				/* we need a list of RangeVars */
-				truncRel = makeRangeVar(get_namespace_name(get_rel_namespace(truncOid)), get_rel_name(truncOid), -1);
-				truncStmt->relations = lappend(truncStmt->relations, truncRel);
-
-				ExecuteTruncate(truncStmt);
-			}
-		}
-		
 		/* MPP-4082. Issue automatic ANALYZE if conditions are satisfied. */
 		bool inFunction = false;
 		auto_stats(cmdType, relationOid, queryDesc->es_processed, inFunction);
@@ -406,12 +377,12 @@ ChoosePortalStrategy(List *stmts)
 	 */
 	if (list_length(stmts) == 1)
 	{
-		Node	   *stmt = (Node*) linitial(stmts);
+		Node	   *stmt = (Node *) linitial(stmts);
 
 		if (IsA(stmt, Query))
 		{
-			Query	   *query = (Query*) stmt;
-			
+			Query	   *query = (Query *) stmt;
+
 			if (query->canSetTag)
 			{
 				if (query->commandType == CMD_SELECT &&
@@ -431,7 +402,7 @@ ChoosePortalStrategy(List *stmts)
 		else if (IsA(stmt, PlannedStmt))
 		{
 			PlannedStmt *pstmt = (PlannedStmt *) stmt;
-			
+
 			if (pstmt->canSetTag)
 			{
 				if (pstmt->commandType == CMD_SELECT &&
@@ -551,7 +522,7 @@ FetchStatementTargetList(Node *stmt)
 	if (IsA(stmt, PlannedStmt))
 	{
 		PlannedStmt *pstmt = (PlannedStmt *) stmt;
-		
+
 		if (pstmt->commandType == CMD_SELECT &&
 			pstmt->utilityStmt == NULL &&
 			pstmt->intoClause == NULL)
@@ -564,7 +535,7 @@ FetchStatementTargetList(Node *stmt)
 	{
 		FetchStmt  *fstmt = (FetchStmt *) stmt;
 		Portal		subportal;
-		
+
 		Assert(!fstmt->ismove);
 		subportal = GetPortalByName(fstmt->portalname);
 		Assert(PortalIsValid(subportal));
@@ -574,7 +545,7 @@ FetchStatementTargetList(Node *stmt)
 	{
 		ExecuteStmt *estmt = (ExecuteStmt *) stmt;
 		PreparedStatement *entry;
-		
+
 		Assert(!estmt->into);
 		entry = FetchPreparedStatement(estmt->name, true);
 		return FetchPreparedStatementTargetList(entry);
@@ -621,7 +592,7 @@ PortalStart(Portal portal, ParamListInfo params, Snapshot snapshot,
     
 	portal->ddesc = ddesc;
 
-    /*
+	/*
 	 * Set up global portal context pointers.  (Should we set QueryContext?)
 	 */
 	saveActivePortal = ActivePortal;
@@ -1223,9 +1194,7 @@ PortalRunSelect(Portal portal,
 			count = 0;
 
 		if (portal->holdStore)
-		{
 			nprocessed = RunFromStore(portal, direction, count, dest);
-		}
 		else
 		{
 			ActiveSnapshot = queryDesc->snapshot;

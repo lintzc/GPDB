@@ -1846,7 +1846,13 @@ url_fclose(URL_FILE *file, bool failOnError, const char *relname)
 			break;
     }
 
-    free(file);
+	/*
+	 * If failOnError is true then we won't reach here due to previous calls to
+	 * ereport(), but static analysers might not pick that up so make the
+	 * intention explicit to avoid warnings for double free().
+	 */
+	if (!failOnError && file)
+		free(file);
 
     return ret;
 }
@@ -1901,8 +1907,12 @@ url_ferror(URL_FILE *file, int bytesread, char *ebuf, int ebuflen)
 			ret = (bytesread == -1);
 			if(ret == true && ebuflen > 0 && ebuf != NULL)
 			{
-				nread = piperead(file->u.exec.pipes[EXEC_ERR_P], ebuf, ebuflen);
-			
+				/*
+				 * Read one byte less than the maximum size to ensure zero
+				 * termination of the buffer.
+				 */
+				nread = piperead(file->u.exec.pipes[EXEC_ERR_P], ebuf, ebuflen -1);
+
 				if(nread != -1)
 					ebuf[nread] = 0;
 				else
